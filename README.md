@@ -76,6 +76,13 @@ Full support for 5 languages:
 
 ### 🔧 Integrations
 - **TinySA Helper**: Integration with TinySA devices via USB
+  - **Automatic detection**: TinySA is detected on-the-fly when connected via USB
+  - **Drivers included**: Android recognizes TinySA by default as a serial bus device (no additional drivers needed)
+  - **Sweep transmission**: Capable of sending spectrum sweeps to the server in configured frequency bands
+  - **Drone detection focus**: Designed primarily for drone detection at 2.4 GHz and 5.8 GHz bands
+  - **Server-controlled**: Frequency bands are configured from the server side
+  - **Sweep-based functionality**: All features are based on spectrum sweeps
+  - **Future enhancements**: Future versions will include client-side control capabilities and additional features beyond server remote control
 - **Tailscale**: Direct integration with Tailscale application
 - **ADB**: Support for USB debugging connection
 
