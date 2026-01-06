@@ -6,6 +6,9 @@
   <a href="https://kotlinlang.org/">
     <img src="https://img.shields.io/badge/Kotlin-1.9+-7F52FF?style=flat-square&logo=kotlin&logoColor=white" alt="Kotlin">
   </a>
+  <a href="https://github.com/zarkentroska/ADAS3-Client/releases">
+    <img src="https://img.shields.io/badge/Downloads-Latest-6B7280?style=flat-square&logoColor=white&labelColor=6B7280&color=22C55E" alt="Downloads">
+  </a>
 </div>
 
 ADAS3 Android Client is a real-time video and audio streaming application for Android devices. It allows you to turn your Android device into an IP camera with advanced configuration capabilities and multiple connection options.
@@ -72,6 +75,13 @@ Full support for 5 languages:
 ## 🚀 Installation
 
 ### Option 1: Precompiled APK
+
+<div align="center">
+  <a href="https://github.com/zarkentroska/ADAS3-Client/releases/latest">
+    <img src="https://user-images.githubusercontent.com/69304392/148696068-0cfea65d-b18f-4685-82b5-329a330b1c0d.png" alt="Get it on GitHub" width="200">
+  </a>
+</div>
+
 1. Download the APK from [Releases](https://github.com/zarkentroska/ADAS3-Client/releases)
 2. Enable "Unknown sources" on your Android device
 3. Install the downloaded APK
