@@ -4,6 +4,8 @@
 
 ADAS3 Android Client is a real-time video and audio streaming application for Android devices. It allows you to turn your Android device into an IP camera with advanced configuration capabilities and multiple connection options.
 
+This application is part of a **client-server architecture project** that works together with [ADAS3 Server](https://github.com/zarkentroska/adas3-server). The ultimate goal of this combined project is **drone detection for various applications**, providing a complete solution for monitoring and detecting unmanned aerial vehicles (UAVs) in real-time.
+
 ## 📱 Main Features
 
 ### 🎥 Video Streaming
