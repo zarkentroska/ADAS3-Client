@@ -15,6 +15,23 @@ ADAS3 Android Client is a real-time video and audio streaming application for An
 
 This application is part of a **client-server architecture project** that works together with [ADAS3 Server](https://github.com/zarkentroska/adas3-server). The ultimate goal of this combined project is **drone detection for various applications**, providing a complete solution for monitoring and detecting unmanned aerial vehicles (UAVs) in real-time.
 
+<div align="center">
+  <table>
+    <tr>
+      <td align="center" width="33%">
+        <img src="https://raw.githubusercontent.com/zarkentroska/ADAS3-Client/main/interfaz1.jpg" alt="ADAS3 Client Interface 1" width="200">
+      </td>
+      <td align="center" width="33%">
+        <img src="https://raw.githubusercontent.com/zarkentroska/ADAS3-Client/main/interfaz2.jpg" alt="ADAS3 Client Interface 2" width="200">
+      </td>
+      <td align="center" width="33%">
+        <img src="https://raw.githubusercontent.com/zarkentroska/ADAS3-Client/main/interfaz3.jpg" alt="ADAS3 Client Interface 3" width="200">
+      </td>
+    </tr>
+  </table>
+  <p><em>Screenshots of the ADAS3 Android Client user interface</em></p>
+</div>
+
 ## 📱 Main Features
 
 ### 🎥 Video Streaming
