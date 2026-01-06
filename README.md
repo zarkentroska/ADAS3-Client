@@ -15,6 +15,10 @@ ADAS3 Android Client is a real-time video and audio streaming application for An
 
 This application is part of a **client-server architecture project** that works together with [ADAS3 Server](https://github.com/zarkentroska/adas3-server). The ultimate goal of this combined project is **drone detection for various applications**, providing a complete solution for monitoring and detecting unmanned aerial vehicles (UAVs) in real-time.
 
+## About
+
+Android application that acts as a remote streaming node for the ADAS3 drone detection system. Captures and streams real-time audio, video, and RF spectrum data (via TinySA) to the central processing server for AI-based drone detection analysis using machine learning models (YOLO, TensorFlow, etc.).
+
 <div align="center">
   <table>
     <tr>
@@ -32,9 +36,9 @@ This application is part of a **client-server architecture project** that works 
   <p><em>Screenshots of the ADAS3 Android Client user interface</em></p>
 </div>
 
-## 📱 Main features
+## 📱 Main Features
 
-### 🎥 Video streaming
+### 🎥 Video Streaming
 - **Real-time streaming** from the device camera
 - **Multiple resolutions** supported (720x480, 1280x720, 1920x1080 and more)
 - **Image quality control** adjustable (0-100%)
@@ -48,7 +52,7 @@ This application is part of a **client-server architecture project** that works 
 - **Configurable sample rates** (8000 Hz, 16000 Hz, 44100 Hz, 48000 Hz)
 - **Quick enable/disable** via button
 
-### 🌐 Connection options
+### 🌐 Connection Options
 - **Automatic IP detection** of available IPs
 - **Smart prioritization**: Tailscale > LAN/Wi-Fi > 4G/5G
 - **Tailscale support** with automatic detection and quick access
@@ -60,7 +64,7 @@ This application is part of a **client-server architecture project** that works 
   - `(LAN/Wi-Fi)` for local IPs (192.168.x.x)
   - `(4G/5G)` for mobile data IPs
 
-### ⚙️ Advanced configuration
+### ⚙️ Advanced Configuration
 - **Optional HTTP Basic Authentication** (username/password)
 - **TLS/HTTPS support** with custom certificates
 - **Persistent configuration** of all options
@@ -110,7 +114,7 @@ Full support for 5 languages:
 2. Enable "Unknown sources" on your Android device
 3. Install the downloaded APK
 
-### Option 2: Build from source
+### Option 2: Build from Source
 ```bash
 # Clone the repository
 git clone https://github.com/zarkentroska/ADAS3-Client.git
@@ -124,7 +128,7 @@ cd ADAS3-Client
 
 ## ⚙️ Configuration
 
-### Initial configuration
+### Initial Configuration
 
 When opening the application for the first time, the following default values will be applied:
 
@@ -137,15 +141,15 @@ When opening the application for the first time, the following default values wi
 - **Port**: 8080
 - **Language**: Spanish
 
-### Access settings
+### Access Settings
 
 1. Open the application
 2. Tap the **Settings** button (⚙️) in the main interface
 3. Configure options according to your needs
 
-### Network configuration
+### Network Configuration
 
-#### IP selection
+#### IP Selection
 The application automatically detects all available IPs and prioritizes them in this order:
 1. **Tailscale** (if available and active)
 2. **LAN/Wi-Fi** (local networks)
@@ -156,7 +160,7 @@ You can:
 - Use the **refresh** button (🔄) to update the list without restarting
 - Select **ADB** if you have the device connected via USB
 
-#### Connection port
+#### Connection Port
 - Default: **8080**
 - Configurable in Settings > Network Settings > Connection Port
 - Valid range: 1-65535
@@ -175,14 +179,14 @@ For example:
 
 ## 🎮 Usage
 
-### Start streaming
+### Start Streaming
 1. Open the application
 2. The camera will start automatically
 3. Select the desired IP from the dropdown menu
 4. Streaming will start automatically
 5. Access the displayed URL from any device on the same network
 
-### Audio control
+### Audio Control
 - Tap the **audio** button (🎤) to enable/disable audio streaming
 - Status is shown via toast message
 
@@ -191,7 +195,7 @@ For example:
 - Tap the switch to open Tailscale
 - Tailscale IPs are automatically detected and prioritized
 
-### ADB connection
+### ADB Connection
 - Connect your device via USB
 - Enable USB debugging
 - Select "ADB" in the IP menu
@@ -213,7 +217,7 @@ For secure streaming:
 
 ## 🛠️ Development
 
-### Project structure
+### Project Structure
 ```
 ADAS3-Client/
 ├── app/
