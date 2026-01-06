@@ -2,6 +2,12 @@
 
 **Version:** 0.5 Alpha
 
+<div align="left">
+  <a href="https://kotlinlang.org/">
+    <img src="https://img.shields.io/badge/Kotlin-1.9+-7F52FF?style=flat-square&logo=kotlin&logoColor=white" alt="Kotlin">
+  </a>
+</div>
+
 ADAS3 Android Client is a real-time video and audio streaming application for Android devices. It allows you to turn your Android device into an IP camera with advanced configuration capabilities and multiple connection options.
 
 This application is part of a **client-server architecture project** that works together with [ADAS3 Server](https://github.com/zarkentroska/adas3-server). The ultimate goal of this combined project is **drone detection for various applications**, providing a complete solution for monitoring and detecting unmanned aerial vehicles (UAVs) in real-time.
