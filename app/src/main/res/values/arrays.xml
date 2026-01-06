@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="camera_resolution_entries">
+        <item>Alta</item>
+        <item>Media</item>
+        <item>Baja</item>
+    </string-array>
+
+    <string-array name="camera_resolution_values">
+        <item>high</item>
+        <item>medium</item>
+        <item>low</item>
+    </string-array>
+
+    <string-array name="camera_fps_entries">
+        <item>30 FPS Modo 1</item>
+        <item>30 FPS Modo 2</item>
+        <item>40 FPS</item>
+        <item>50 FPS</item>
+        <item>60 FPS</item>
+    </string-array>
+
+    <string-array name="camera_fps_values">
+        <item>auto</item>
+        <item>30</item>
+        <item>40</item>
+        <item>50</item>
+        <item>60</item>
+    </string-array>
+
+    <string-array name="audio_channels_entries">
+        <item>Mono</item>
+        <item>Estéreo</item>
+    </string-array>
+
+    <string-array name="audio_channels_values">
+        <item>mono</item>
+        <item>stereo</item>
+    </string-array>
+
+    <string-array name="audio_sample_rate_entries">
+        <item>8000 Hz (Baja calidad)</item>
+        <item>16000 Hz (Media)</item>
+        <item>22050 Hz</item>
+        <item>44100 Hz (CD)</item>
+        <item>48000 Hz (Alta calidad)</item>
+    </string-array>
+
+    <string-array name="audio_sample_rate_values">
+        <item>8000</item>
+        <item>16000</item>
+        <item>22050</item>
+        <item>44100</item>
+        <item>48000</item>
+    </string-array>
+    
+    <!-- Language options -->
+    <string-array name="language_entries">
+        <item>Español</item>
+        <item>English</item>
+        <item>Français</item>
+        <item>Italiano</item>
+        <item>Português</item>
+    </string-array>
+    
+    <string-array name="language_values">
+        <item>es</item>
+        <item>en</item>
+        <item>fr</item>
+        <item>it</item>
+        <item>pt</item>
+    </string-array>
+</resources>

@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- General -->
+    <string name="app_name">ADAS3 Client</string>
+    
+    <!-- Settings Categories -->
+    <string name="settings_video_quality">Qualidade de Vídeo</string>
+    <string name="settings_audio_quality">Qualidade de Áudio</string>
+    <string name="settings_network">Configurações de Rede</string>
+    <string name="settings_language">Idioma</string>
+    <string name="settings_http_auth">Autenticação HTTP Basic</string>
+    <string name="settings_certificate">Configurações de Certificado (requer reinicialização)</string>
+    
+    <!-- Video Quality Settings -->
+    <string name="settings_camera_resolution">Resolução da câmera</string>
+    <string name="settings_image_quality">Qualidade da imagem</string>
+    <string name="settings_camera_fps">FPS da câmera</string>
+    <string name="settings_stream_delay">Atraso</string>
+    <string name="settings_stream_delay_summary">Atraso entre frames em ms (0 = sem atraso)</string>
+    
+    <!-- Audio Quality Settings -->
+    <string name="settings_audio_channels">Canais de áudio</string>
+    <string name="settings_audio_sample_rate">Taxa de amostragem</string>
+    
+    <!-- Network Settings -->
+    <string name="settings_stream_port">Porta de conexão</string>
+    <string name="settings_stream_port_summary">Porta para o servidor de streaming</string>
+    
+    <!-- Language Settings -->
+    <string name="settings_language_title">Idioma</string>
+    <string name="settings_language_summary">Selecione o idioma do aplicativo</string>
+    
+    <!-- HTTP Auth Settings -->
+    <string name="settings_http_auth_summary">Deixe em branco para nenhum nome de usuário/senha</string>
+    <string name="settings_username">Nome de usuário</string>
+    <string name="settings_password">Senha</string>
+    <string name="settings_username_dialog">Digite o nome de usuário</string>
+    <string name="settings_password_dialog">Digite a senha</string>
+    
+    <!-- Certificate Settings -->
+    <string name="settings_use_certificate">Habilitar TLS/HTTPS</string>
+    <string name="settings_use_certificate_summary">Usar HTTPS para streaming de vídeo seguro</string>
+    <string name="settings_certificate_path">Certificado TLS</string>
+    <string name="settings_certificate_path_summary">Selecione um arquivo de certificado TLS</string>
+    <string name="settings_certificate_password">Senha do certificado</string>
+    <string name="settings_certificate_password_summary">Senha opcional para o certificado TLS</string>
+    <string name="settings_select_certificate">Selecionar Certificado TLS</string>
+    
+    <!-- Messages -->
+    <string name="toast_tinysa_connected">Conexão TinySA bem-sucedida</string>
+    <string name="toast_audio_enabled">Áudio habilitado</string>
+    <string name="toast_audio_disabled">Áudio desabilitado</string>
+    <string name="toast_audio_permission_required">Permissão de áudio necessária para habilitar este recurso</string>
+    <string name="toast_ips_updated">IPs atualizados</string>
+    <string name="toast_opening_tailscale">Abrindo Tailscale…</string>
+    <string name="toast_tailscale_not_installed">Tailscale não está instalado. Por favor, instale-o na Google Play Store.</string>
+    <string name="toast_tailscale_cannot_open">Não foi possível abrir Tailscale. Por favor, abra-o manualmente no launcher.</string>
+    <string name="toast_tailscale_play_store">Abrindo Google Play Store para instalar Tailscale…</string>
+    <string name="toast_invalid_port">Porta inválida. Deve estar entre 1 e 65535</string>
+    
+    <!-- IP Labels -->
+    <string name="ip_label_tailscale">Tailscale</string>
+    <string name="ip_label_lan_wifi">LAN/Wi-Fi</string>
+    <string name="ip_label_4g_5g">4G/5G</string>
+    
+    <!-- App Version -->
+    <string name="settings_app_version">Ver: ADAS3 Android Client v0.5 Alpha</string>
+    <string name="settings_app_version_summary">Ver: ADAS3 Android Client v0.5 Alpha</string>
+</resources>
+

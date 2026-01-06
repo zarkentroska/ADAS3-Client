@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- General -->
+    <string name="app_name">ADAS3 Client</string>
+    
+    <!-- Settings Categories -->
+    <string name="settings_video_quality">Calidad de Vídeo</string>
+    <string name="settings_audio_quality">Calidad de Audio</string>
+    <string name="settings_network">Configuración de Red</string>
+    <string name="settings_language">Idioma</string>
+    <string name="settings_http_auth">Autenticación HTTP Básica</string>
+    <string name="settings_certificate">Configuración de Certificado (requiere reinicio)</string>
+    
+    <!-- Video Quality Settings -->
+    <string name="settings_camera_resolution">Resolución de la cámara</string>
+    <string name="settings_image_quality">Calidad de la imagen</string>
+    <string name="settings_camera_fps">FPS de cámara</string>
+    <string name="settings_stream_delay">Delay</string>
+    <string name="settings_stream_delay_summary">Retardo entre frames en ms (0 = sin retardo)</string>
+    
+    <!-- Audio Quality Settings -->
+    <string name="settings_audio_channels">Canales de audio</string>
+    <string name="settings_audio_sample_rate">Frecuencia de muestreo</string>
+    
+    <!-- Network Settings -->
+    <string name="settings_stream_port">Puerto de conexión</string>
+    <string name="settings_stream_port_summary">Puerto para el servidor de streaming</string>
+    
+    <!-- Language Settings -->
+    <string name="settings_language_title">Idioma</string>
+    <string name="settings_language_summary">Selecciona el idioma de la aplicación</string>
+    
+    <!-- HTTP Auth Settings -->
+    <string name="settings_http_auth_summary">Dejar en blanco para no usar nombre de usuario/contraseña</string>
+    <string name="settings_username">Nombre de usuario</string>
+    <string name="settings_password">Contraseña</string>
+    <string name="settings_username_dialog">Introduce el nombre de usuario</string>
+    <string name="settings_password_dialog">Introduce la contraseña</string>
+    
+    <!-- Certificate Settings -->
+    <string name="settings_use_certificate">Habilitar TLS/HTTPS</string>
+    <string name="settings_use_certificate_summary">Usar HTTPS para streaming de vídeo seguro</string>
+    <string name="settings_certificate_path">Certificado TLS</string>
+    <string name="settings_certificate_path_summary">Selecciona un archivo de certificado TLS</string>
+    <string name="settings_certificate_password">Contraseña del Certificado</string>
+    <string name="settings_certificate_password_summary">Contraseña opcional para el certificado TLS</string>
+    <string name="settings_select_certificate">Seleccionar Certificado TLS</string>
+    
+    <!-- Messages -->
+    <string name="toast_tinysa_connected">Conexión con TinySA exitosa</string>
+    <string name="toast_audio_enabled">Audio activado</string>
+    <string name="toast_audio_disabled">Audio desactivado</string>
+    <string name="toast_audio_permission_required">Se necesita permiso de audio para activar esta función</string>
+    <string name="toast_ips_updated">IPs actualizadas</string>
+    <string name="toast_opening_tailscale">Abriendo Tailscale…</string>
+    <string name="toast_tailscale_not_installed">Tailscale no está instalado. Por favor, instálalo desde Google Play Store.</string>
+    <string name="toast_tailscale_cannot_open">No se pudo abrir Tailscale. Intenta abrirlo manualmente desde el launcher.</string>
+    <string name="toast_tailscale_play_store">Abriendo Google Play Store para instalar Tailscale…</string>
+    <string name="toast_invalid_port">Puerto inválido. Debe estar entre 1 y 65535</string>
+    
+    <!-- IP Labels -->
+    <string name="ip_label_tailscale">Tailscale</string>
+    <string name="ip_label_lan_wifi">LAN/Wi-Fi</string>
+    <string name="ip_label_4g_5g">4G/5G</string>
+    
+    <!-- App Version -->
+    <string name="settings_app_version">Ver: ADAS3 Android Client v0.5 Alpha</string>
+    <string name="settings_app_version_summary">Ver: ADAS3 Android Client v0.5 Alpha</string>
+</resources>
+

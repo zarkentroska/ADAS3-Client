@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
+    <PreferenceCategory
+        android:title="@string/settings_video_quality">
+        <ListPreference
+            android:key="camera_resolution"
+            android:title="@string/settings_camera_resolution"
+            android:summary="%s"
+            android:defaultValue=""
+            android:entries="@array/camera_resolution_entries"
+            android:entryValues="@array/camera_resolution_values" />
+        <SeekBarPreference
+            android:key="image_quality"
+            android:title="@string/settings_image_quality"
+            android:summary="%d%%"
+            android:defaultValue="50"
+            android:max="100"
+            android:min="0" />
+        <ListPreference
+            android:key="camera_fps"
+            android:title="@string/settings_camera_fps"
+            android:summary="%s"
+            android:defaultValue="30"
+            android:entries="@array/camera_fps_entries"
+            android:entryValues="@array/camera_fps_values" />
+        <EditTextPreference
+            android:key="stream_delay"
+            android:title="@string/settings_stream_delay"
+            android:summary="@string/settings_stream_delay_summary"
+            android:defaultValue="0"
+            android:inputType="number" />
+    </PreferenceCategory>
+    <PreferenceCategory
+        android:title="@string/settings_audio_quality">
+        <ListPreference
+            android:key="audio_channels"
+            android:title="@string/settings_audio_channels"
+            android:summary="%s"
+            android:defaultValue="stereo"
+            android:entries="@array/audio_channels_entries"
+            android:entryValues="@array/audio_channels_values" />
+        <ListPreference
+            android:key="audio_sample_rate"
+            android:title="@string/settings_audio_sample_rate"
+            android:summary="%s"
+            android:defaultValue="44100"
+            android:entries="@array/audio_sample_rate_entries"
+            android:entryValues="@array/audio_sample_rate_values" />
+    </PreferenceCategory>
+    <PreferenceCategory
+        android:title="@string/settings_network">
+        <EditTextPreference
+            android:key="stream_port"
+            android:title="@string/settings_stream_port"
+            android:summary="@string/settings_stream_port_summary"
+            android:defaultValue="8080"
+            android:inputType="number" />
+    </PreferenceCategory>
+    <PreferenceCategory
+        android:title="@string/settings_language">
+        <ListPreference
+            android:key="app_language"
+            android:title="@string/settings_language_title"
+            android:summary="@string/settings_language_summary"
+            android:defaultValue="es"
+            android:entries="@array/language_entries"
+            android:entryValues="@array/language_values" />
+    </PreferenceCategory>
+    <PreferenceCategory
+        android:title="@string/settings_http_auth"
+        android:summary="@string/settings_http_auth_summary">
+        <EditTextPreference
+            android:key="username"
+            android:title="@string/settings_username"
+            android:summary=""
+            android:defaultValue=""
+            android:singleLine="true"
+            android:dialogTitle="@string/settings_username_dialog" />
+        <EditTextPreference
+            android:key="password"
+            android:title="@string/settings_password"
+            android:defaultValue=""
+            android:inputType="textPassword"
+            android:singleLine="true"
+            android:dialogTitle="@string/settings_password_dialog" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/settings_certificate">
+        <SwitchPreference
+            android:key="use_certificate"
+            android:title="@string/settings_use_certificate"
+            android:summary="@string/settings_use_certificate_summary"
+            android:defaultValue="false" />
+        <Preference
+            android:key="certificate_path"
+            android:title="@string/settings_certificate_path"
+            android:summary="@string/settings_certificate_path_summary"
+            android:persistent="true"
+            android:dependency="use_certificate" />
+        <EditTextPreference
+            android:key="certificate_password"
+            android:title="@string/settings_certificate_password"
+            android:summary="@string/settings_certificate_password_summary"
+            android:persistent="true"
+            android:inputType="textPassword"
+            android:dependency="use_certificate" />
+    </PreferenceCategory>
+    <Preference
+        android:key="app_version"
+        android:title="@string/settings_app_version"
+        android:summary="@string/settings_app_version_summary" />
+</PreferenceScreen>

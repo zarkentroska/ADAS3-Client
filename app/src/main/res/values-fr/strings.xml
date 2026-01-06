@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- General -->
+    <string name="app_name">ADAS3 Client</string>
+    
+    <!-- Settings Categories -->
+    <string name="settings_video_quality">Qualité Vidéo</string>
+    <string name="settings_audio_quality">Qualité Audio</string>
+    <string name="settings_network">Paramètres Réseau</string>
+    <string name="settings_language">Langue</string>
+    <string name="settings_http_auth">Authentification HTTP Basic</string>
+    <string name="settings_certificate">Paramètres de Certificat (redémarrage requis)</string>
+    
+    <!-- Video Quality Settings -->
+    <string name="settings_camera_resolution">Résolution de la caméra</string>
+    <string name="settings_image_quality">Qualité de l\'image</string>
+    <string name="settings_camera_fps">FPS de la caméra</string>
+    <string name="settings_stream_delay">Délai</string>
+    <string name="settings_stream_delay_summary">Délai entre les images en ms (0 = sans délai)</string>
+    
+    <!-- Audio Quality Settings -->
+    <string name="settings_audio_channels">Canaux audio</string>
+    <string name="settings_audio_sample_rate">Fréquence d\'échantillonnage</string>
+    
+    <!-- Network Settings -->
+    <string name="settings_stream_port">Port de connexion</string>
+    <string name="settings_stream_port_summary">Port pour le serveur de streaming</string>
+    
+    <!-- Language Settings -->
+    <string name="settings_language_title">Langue</string>
+    <string name="settings_language_summary">Sélectionnez la langue de l\'application</string>
+    
+    <!-- HTTP Auth Settings -->
+    <string name="settings_http_auth_summary">Laisser vide pour aucun nom d\'utilisateur/mot de passe</string>
+    <string name="settings_username">Nom d\'utilisateur</string>
+    <string name="settings_password">Mot de passe</string>
+    <string name="settings_username_dialog">Entrer le nom d\'utilisateur</string>
+    <string name="settings_password_dialog">Entrer le mot de passe</string>
+    
+    <!-- Certificate Settings -->
+    <string name="settings_use_certificate">Activer TLS/HTTPS</string>
+    <string name="settings_use_certificate_summary">Utiliser HTTPS pour le streaming vidéo sécurisé</string>
+    <string name="settings_certificate_path">Certificat TLS</string>
+    <string name="settings_certificate_path_summary">Sélectionner un fichier de certificat TLS</string>
+    <string name="settings_certificate_password">Mot de passe du certificat</string>
+    <string name="settings_certificate_password_summary">Mot de passe optionnel pour le certificat TLS</string>
+    <string name="settings_select_certificate">Sélectionner le certificat TLS</string>
+    
+    <!-- Messages -->
+    <string name="toast_tinysa_connected">Connexion TinySA réussie</string>
+    <string name="toast_audio_enabled">Audio activé</string>
+    <string name="toast_audio_disabled">Audio désactivé</string>
+    <string name="toast_audio_permission_required">Permission audio requise pour activer cette fonctionnalité</string>
+    <string name="toast_ips_updated">IPs mises à jour</string>
+    <string name="toast_opening_tailscale">Ouverture de Tailscale…</string>
+    <string name="toast_tailscale_not_installed">Tailscale n\'est pas installé. Veuillez l\'installer depuis Google Play Store.</string>
+    <string name="toast_tailscale_cannot_open">Impossible d\'ouvrir Tailscale. Veuillez l\'ouvrir manuellement depuis le lanceur.</string>
+    <string name="toast_tailscale_play_store">Ouverture de Google Play Store pour installer Tailscale…</string>
+    <string name="toast_invalid_port">Port invalide. Doit être entre 1 et 65535</string>
+    
+    <!-- IP Labels -->
+    <string name="ip_label_tailscale">Tailscale</string>
+    <string name="ip_label_lan_wifi">LAN/Wi-Fi</string>
+    <string name="ip_label_4g_5g">4G/5G</string>
+    
+    <!-- App Version -->
+    <string name="settings_app_version">Ver: ADAS3 Android Client v0.5 Alpha</string>
+    <string name="settings_app_version_summary">Ver: ADAS3 Android Client v0.5 Alpha</string>
+</resources>
+
