@@ -249,23 +249,26 @@ class MainActivity : AppCompatActivity() {
         PreferenceManager.getDefaultSharedPreferences(this)
             .registerOnSharedPreferenceChangeListener(prefsListener)
 
-        // Read audio settings from preferences
-        val prefsForAudio = PreferenceManager.getDefaultSharedPreferences(this)
-        val audioChannelsPref = prefsForAudio.getString("audio_channels", "mono") ?: "mono"
-        val audioSampleRatePref = prefsForAudio.getString("audio_sample_rate", "44100")?.toIntOrNull() ?: 44100
+        // Audio settings: fixed to Mono 44100 Hz
+        val audioSampleRatePref = 44100
+        val audioChannelsPref = 1  // 1 = mono
         
         // Get stream port from preferences
         val streamPort = getStreamPort()
         
-        // Get default IP address (Tailscale > WiFi/LAN > Mobile Data)
-        val defaultIpForServer = getDefaultIpAddress()
-        val savedBindIp = prefsForAudio.getString("selected_bind_ip", defaultIpForServer)
+        // Get saved IP address or use first available
+        val prefsForAudio = PreferenceManager.getDefaultSharedPreferences(this)
+        val savedBindIp = prefsForAudio.getString("selected_bind_ip", null)
+        val availableIps = getAllLocalIpAddresses()
+        val firstAvailableIp = availableIps.firstOrNull()
+        
         // Handle ADB option: convert "ADB" to "127.0.0.1"
+        // If no IP is saved, use first available (or ADB if available)
         val bindIp = when (savedBindIp) {
             "ADB", "127.0.0.1" -> "127.0.0.1"
-            null -> defaultIpForServer
+            null -> firstAvailableIp ?: "127.0.0.1"
             else -> savedBindIp
-        } ?: defaultIpForServer
+        } ?: firstAvailableIp ?: "127.0.0.1"
         
         // Start streaming server with TinySA command handler
         streamingServerHelper = StreamingServerHelper(
@@ -283,9 +286,9 @@ class MainActivity : AppCompatActivity() {
             },
             bindIpAddress = bindIp
         )
-        // Configure audio settings for HTTP headers
+        // Configure audio settings for HTTP headers (fixed to Mono 44100 Hz)
         streamingServerHelper?.audioSampleRate = audioSampleRatePref
-        streamingServerHelper?.audioChannels = if (audioChannelsPref == "stereo") 2 else 1
+        streamingServerHelper?.audioChannels = audioChannelsPref
         
         lifecycleScope.launch(Dispatchers.IO) { streamingServerHelper?.startStreamingServer() }
         
@@ -347,12 +350,6 @@ class MainActivity : AppCompatActivity() {
         // Get stream port from preferences for spinner
         val streamPortForSpinner = getStreamPort()
         
-        // Get default IP address (prioritize Tailscale)
-        val defaultIp = getDefaultIpAddress()
-        
-        // Check if ADB is connected
-        val adbConnected = isAdbConnected()
-        
         // Configure IP address spinner (only IPs, no "Todas") - show IP:port
         val spinnerItems = buildIpSpinnerItems(ipAddresses, streamPortForSpinner)
         
@@ -379,68 +376,46 @@ class MainActivity : AppCompatActivity() {
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         ipAddressSpinner.adapter = adapter
         
-        // Load saved IP selection or use default IP
-        // If ADB is connected, automatically select ADB option
+        // Load saved IP selection - DO NOT change it automatically
         val savedIp = prefs.getString("selected_bind_ip", null)
         
-        // If ADB is connected, prioritize ADB selection
-        val ipToUse = if (adbConnected) {
-            "ADB (127.0.0.1:$streamPortForSpinner)"
-        } else {
-            val savedIpWithPort = savedIp?.let { 
-                if (savedIp == "ADB" || savedIp == "127.0.0.1") {
-                    "ADB (127.0.0.1:$streamPortForSpinner)"
+        // Try to find saved IP in spinner items
+        val ipToUse = savedIp?.let { 
+            if (savedIp == "ADB" || savedIp == "127.0.0.1") {
+                "ADB (127.0.0.1:$streamPortForSpinner)"
+            } else {
+                // Check if it's a Tailscale IP
+                if (savedIp.startsWith("100.")) {
+                    "$savedIp:$streamPortForSpinner (Tailscale)"
                 } else {
-                    // Check if it's a Tailscale IP
-                    if (savedIp.startsWith("100.")) {
-                        "$savedIp:$streamPortForSpinner (Tailscale)"
-                    } else {
-                        "$savedIp:$streamPortForSpinner"
-                    }
+                    "$savedIp:$streamPortForSpinner"
                 }
             }
-            val savedIpExists = savedIp != null && spinnerItems.contains(savedIpWithPort)
-            if (savedIpExists) savedIpWithPort else {
-                defaultIp?.let {
-                    if (it.startsWith("100.")) {
-                        "$it:$streamPortForSpinner (Tailscale)"
-                    } else {
-                        "$it:$streamPortForSpinner"
-                    }
+        }?.takeIf { spinnerItems.contains(it) }
+        
+        // Find index of saved IP
+        val selectedIndex = if (ipToUse != null) {
+            // Use saved IP if found
+            spinnerItems.indexOfFirst { item -> item == ipToUse }.takeIf { it >= 0 } ?: 0
+        } else if (savedIp != null) {
+            // If saved IP is not in the list but exists, keep it and select first non-ADB IP as fallback
+            // But don't save it - keep the original saved IP
+            val nonAdbIndex = spinnerItems.indexOfFirst { !it.startsWith("ADB") }.takeIf { it >= 0 } ?: 0
+            nonAdbIndex
+        } else {
+            // Only if no IP was ever saved, use first non-ADB IP and save it
+            val firstNonAdbItem = spinnerItems.firstOrNull { !it.startsWith("ADB") } ?: spinnerItems.firstOrNull() ?: ""
+            if (firstNonAdbItem.isNotEmpty()) {
+                val firstIp = if (firstNonAdbItem.startsWith("ADB")) {
+                    "ADB"
+                } else {
+                    firstNonAdbItem.substringBefore(":").substringBefore(" (")
+                }
+                if (firstIp.isNotEmpty()) {
+                    prefs.edit().putString("selected_bind_ip", firstIp).apply()
                 }
             }
-        }
-        
-        val selectedIndex = spinnerItems.indexOfFirst { it == ipToUse }.takeIf { it >= 0 } 
-            ?: spinnerItems.indexOfFirst { it.contains(defaultIp ?: "") }.takeIf { it >= 0 } ?: 0
-        
-        // Ensure we have a valid IP (extract IP without port for saving)
-        val currentIpWithPort = if (selectedIndex >= 0 && selectedIndex < spinnerItems.size) {
-            spinnerItems[selectedIndex]
-        } else {
-            defaultIp?.let {
-                if (it.startsWith("100.")) {
-                    "$it:$streamPortForSpinner (Tailscale)"
-                } else {
-                    "$it:$streamPortForSpinner"
-                }
-            } ?: ipAddresses.firstOrNull()?.let { 
-                if (it.startsWith("100.")) {
-                    "$it:$streamPortForSpinner (Tailscale)"
-                } else {
-                    "$it:$streamPortForSpinner"
-                }
-            } ?: ""
-        }
-        val currentIp = if (currentIpWithPort.startsWith("ADB")) {
-            "ADB"
-        } else {
-            currentIpWithPort.substringBefore(":").substringBefore(" (")
-        }
-        
-        // Save the current IP (force save if we're using default or ADB is connected)
-        if (currentIp.isNotEmpty() && (adbConnected && currentIp == "ADB" || currentIp != savedIp)) {
-            prefs.edit().putString("selected_bind_ip", currentIp).apply()
+            0
         }
         
         ipAddressSpinner.setSelection(selectedIndex)
@@ -454,10 +429,17 @@ class MainActivity : AppCompatActivity() {
         // Setup Tailscale switch
         setupTailscaleSwitch()
         
-        // Handle IP selection change
+        // Handle IP selection change - only when user manually changes it
+        var isInitialSelection = true
         ipAddressSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
                 if (position < 0 || position >= spinnerItems.size) return
+                
+                // Skip the initial selection event when setting up the spinner
+                if (isInitialSelection) {
+                    isInitialSelection = false
+                    return
+                }
                 
                 val selectedIpWithPort = spinnerItems[position]
                 val selectedIp = if (selectedIpWithPort.startsWith("ADB")) {
@@ -490,11 +472,16 @@ class MainActivity : AppCompatActivity() {
                     streamingServerHelper?.startStreamingServer()
                 }
                 
-                Log.d(TAG, "Changed bind IP to: $bindIp (${if (selectedIpWithPort.startsWith("ADB")) "ADB mode" else "normal"})")
+                Log.d(TAG, "User changed bind IP to: $bindIp (${if (selectedIpWithPort.startsWith("ADB")) "ADB mode" else "normal"})")
             }
             
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
         }
+        
+        // Mark initial selection as complete after a short delay
+        Handler(Looper.getMainLooper()).postDelayed({
+            isInitialSelection = false
+        }, 500)
 
         // Add toggle preview button
         findViewById<ImageButton>(R.id.hidePreviewButton).setOnClickListener {
@@ -518,14 +505,9 @@ class MainActivity : AppCompatActivity() {
             SettingsDialogFragment.show(supportFragmentManager)
         }
         
-        // Initialize audio capture helper with preferences
-        val audioChannels = prefs.getString("audio_channels", "mono") ?: "mono"
-        val audioSampleRate = prefs.getString("audio_sample_rate", "44100")?.toIntOrNull() ?: 44100
-        val channelConfig = if (audioChannels == "stereo") {
-            android.media.AudioFormat.CHANNEL_IN_STEREO
-        } else {
-            android.media.AudioFormat.CHANNEL_IN_MONO
-        }
+        // Initialize audio capture helper with fixed settings: Mono 44100 Hz
+        val audioSampleRate = 44100
+        val channelConfig = android.media.AudioFormat.CHANNEL_IN_MONO
         audioCaptureHelper = AudioCaptureHelper(audioSampleRate, channelConfig)
         audioCaptureHelper?.addAudioDataListener { audioData ->
             if (isAudioEnabled && streamingServerHelper?.getAudioClients()?.isNotEmpty() == true) {
@@ -760,10 +742,10 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             
-            // Build list in order: USB, Tailscale, WiFi/LAN, Mobile Data
+            // Build list in order: USB, WiFi/LAN, Tailscale, Mobile Data (no automatic prioritization)
             usbIp?.let { ipAddresses.add(it) }
-            ipAddresses.addAll(tailscaleIps)
             ipAddresses.addAll(wifiLanIps)
+            ipAddresses.addAll(tailscaleIps)
             ipAddresses.addAll(mobileDataIps)
             
         } catch (e: Exception) {
@@ -949,59 +931,48 @@ class MainActivity : AppCompatActivity() {
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         ipAddressSpinner.adapter = adapter
         
-        // Try to restore previous selection or select default
-        val defaultIp = getDefaultIpAddress()
-        val adbConnected = isAdbConnected()
+        // Try to restore previous selection - DO NOT change it automatically
+        val savedIp = prefs.getString("selected_bind_ip", null)
         
-        // Always prioritize Tailscale IP if available
-        val tailscaleIp = ipAddresses.firstOrNull { it.startsWith("100.") }
-        val tailscaleIpWithPort = tailscaleIp?.let {
-            "$it:$streamPortForSpinner (Tailscale)"
-        }
-        
-        val ipToSelect = when {
-            adbConnected -> "ADB (127.0.0.1:$streamPortForSpinner)"
-            tailscaleIpWithPort != null && spinnerItems.contains(tailscaleIpWithPort) -> tailscaleIpWithPort
-            currentIp == "ADB" -> "ADB (127.0.0.1:$streamPortForSpinner)"
-            currentIp.isNotEmpty() -> {
-                // Try to find the current IP in the new list
-                val currentIpWithPort = if (currentIp.startsWith("100.")) {
-                    "$currentIp:$streamPortForSpinner (Tailscale)"
+        // Try to find saved IP in the new list
+        val ipToSelect = savedIp?.let { 
+            if (savedIp == "ADB" || savedIp == "127.0.0.1") {
+                "ADB (127.0.0.1:$streamPortForSpinner)"
+            } else {
+                // Check if it's a Tailscale IP
+                if (savedIp.startsWith("100.")) {
+                    "$savedIp:$streamPortForSpinner (Tailscale)"
                 } else {
-                    "$currentIp:$streamPortForSpinner"
-                }
-                if (spinnerItems.contains(currentIpWithPort)) {
-                    currentIpWithPort
-                } else {
-                    defaultIp?.let { 
-                        if (it.startsWith("100.")) {
-                            "$it:$streamPortForSpinner (Tailscale)"
-                        } else {
-                            "$it:$streamPortForSpinner"
-                        }
-                    }
+                    "$savedIp:$streamPortForSpinner"
                 }
             }
-            else -> defaultIp?.let { 
-                if (it.startsWith("100.")) {
-                    "$it:$streamPortForSpinner (Tailscale)"
-                } else {
-                    "$it:$streamPortForSpinner"
-                }
-            }
+        }?.takeIf { spinnerItems.contains(it) }
+        
+        // Find index of saved IP - DO NOT prioritize any IP automatically
+        val selectedIndex = if (ipToSelect != null) {
+            // Use saved IP if found
+            spinnerItems.indexOfFirst { item -> item == ipToSelect }.takeIf { it >= 0 } ?: 0
+        } else if (savedIp != null) {
+            // If saved IP is not in the list but exists, keep it and select first non-ADB IP as fallback
+            // But don't save it - keep the original saved IP
+            // Try WiFi/LAN first, then any other, avoid Tailscale if possible
+            val wifiLanIndex = spinnerItems.indexOfFirst { 
+                !it.startsWith("ADB") && !it.contains("Tailscale") 
+            }.takeIf { it >= 0 }
+            wifiLanIndex ?: spinnerItems.indexOfFirst { !it.startsWith("ADB") }.takeIf { it >= 0 } ?: 0
+        } else {
+            // Only if no IP was ever saved, use first non-ADB, non-Tailscale IP if available
+            // Prefer WiFi/LAN over Tailscale for first-time setup
+            val nonAdbNonTailscaleIndex = spinnerItems.indexOfFirst { 
+                !it.startsWith("ADB") && !it.contains("Tailscale") 
+            }.takeIf { it >= 0 }
+            nonAdbNonTailscaleIndex ?: spinnerItems.indexOfFirst { !it.startsWith("ADB") }.takeIf { it >= 0 } ?: 0
         }
         
-        val selectedIndex = ipToSelect?.let { spinnerItems.indexOfFirst { item -> item == it } }?.takeIf { it >= 0 } ?: 0
         ipAddressSpinner.setSelection(selectedIndex)
         
-        // Update saved IP if needed
-        val newSelectedItem = spinnerItems[selectedIndex]
-        val newIp = if (newSelectedItem.startsWith("ADB")) {
-            "ADB"
-        } else {
-            newSelectedItem.substringBefore(":").substringBefore(" (")
-        }
-        prefs.edit().putString("selected_bind_ip", newIp).apply()
+        // DO NOT update saved IP automatically - only update if user manually selects
+        // The saved IP remains unchanged until user explicitly changes it
         
         if (showToast) {
             Toast.makeText(this, getString(R.string.toast_ips_updated), Toast.LENGTH_SHORT).show()
@@ -1250,73 +1221,6 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Log.e(TAG, "Error checking ADB connection: ${e.message}")
             false
-        }
-    }
-    
-    private fun updateIpSpinnerForAdb(selectAdb: Boolean) {
-        val ipAddressSpinner = findViewById<android.widget.Spinner>(R.id.ipAddressSpinner) ?: return
-        val prefs = PreferenceManager.getDefaultSharedPreferences(this)
-        val streamPortForSpinner = getStreamPort()
-        
-        if (selectAdb) {
-            // Save current IP before switching to ADB
-            val currentSelection = ipAddressSpinner.selectedItem?.toString() ?: ""
-            if (!currentSelection.startsWith("ADB")) {
-                val currentIp = currentSelection.substringBefore(":")
-                if (currentIp.isNotEmpty() && currentIp != "ADB" && currentIp != "127.0.0.1") {
-                    prefs.edit().putString("previous_bind_ip", currentIp).apply()
-                    Log.d(TAG, "Saved previous IP before switching to ADB: $currentIp")
-                }
-            }
-            
-            // Find and select ADB option
-            val adapter = ipAddressSpinner.adapter as? android.widget.ArrayAdapter<*>
-            if (adapter != null) {
-                for (i in 0 until adapter.count) {
-                    val item = adapter.getItem(i)?.toString() ?: ""
-                    if (item.startsWith("ADB")) {
-                        ipAddressSpinner.setSelection(i, false)
-                        // Trigger selection change manually
-                        val selectedIp = "ADB"
-                        prefs.edit().putString("selected_bind_ip", selectedIp).apply()
-                        
-                        val bindIp = "127.0.0.1"
-                        streamingServerHelper?.updateBindIpAddress(bindIp)
-                        lifecycleScope.launch(Dispatchers.IO) {
-                            streamingServerHelper?.stopStreamingServer()
-                            kotlinx.coroutines.delay(500)
-                            streamingServerHelper?.startStreamingServer()
-                        }
-                        Log.d(TAG, "Automatically switched to ADB mode")
-                        break
-                    }
-                }
-            }
-        } else {
-            // Restore previous IP
-            val previousIp = prefs.getString("previous_bind_ip", null)
-            if (previousIp != null) {
-                val adapter = ipAddressSpinner.adapter as? android.widget.ArrayAdapter<*>
-                if (adapter != null) {
-                    val previousIpWithPort = "$previousIp:$streamPortForSpinner"
-                    for (i in 0 until adapter.count) {
-                        val item = adapter.getItem(i)?.toString() ?: ""
-                        if (item == previousIpWithPort) {
-                            ipAddressSpinner.setSelection(i, false)
-                            prefs.edit().putString("selected_bind_ip", previousIp).apply()
-                            
-                            streamingServerHelper?.updateBindIpAddress(previousIp)
-                            lifecycleScope.launch(Dispatchers.IO) {
-                                streamingServerHelper?.stopStreamingServer()
-                                kotlinx.coroutines.delay(500)
-                                streamingServerHelper?.startStreamingServer()
-                            }
-                            Log.d(TAG, "Restored previous IP: $previousIp")
-                            break
-                        }
-                    }
-                }
-            }
         }
     }
     
@@ -1624,13 +1528,8 @@ class MainActivity : AppCompatActivity() {
                                         requestTinySAPermission(it)
                                     }
                                     
-                                    // Check if ADB is now connected and switch to ADB mode
-                                    Handler(Looper.getMainLooper()).postDelayed({
-                                        if (isAdbConnected()) {
-                                            Log.d(TAG, "ADB detected, switching to ADB mode")
-                                            updateIpSpinnerForAdb(true)
-                                        }
-                                    }, 1000) // Small delay to ensure ADB is fully initialized
+                                    // ADB connection detected (no automatic IP change)
+                                    Log.d(TAG, "ADB connection detected")
                                 }
                             }
                             android.hardware.usb.UsbManager.ACTION_USB_DEVICE_DETACHED -> {
@@ -1647,13 +1546,8 @@ class MainActivity : AppCompatActivity() {
                                         }
                                     }
                                     
-                                    // Check if ADB is no longer connected and restore previous IP
-                                    Handler(Looper.getMainLooper()).postDelayed({
-                                        if (!isAdbConnected()) {
-                                            Log.d(TAG, "ADB disconnected, restoring previous IP")
-                                            updateIpSpinnerForAdb(false)
-                                        }
-                                    }, 1000) // Small delay to ensure ADB is fully disconnected
+                                    // ADB disconnection detected (no automatic IP change)
+                                    Log.d(TAG, "ADB disconnection detected")
                                 }
                             }
                             "android.hardware.usb.action.USB_DEVICE_PERMISSION" -> {

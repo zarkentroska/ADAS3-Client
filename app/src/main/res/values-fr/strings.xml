@@ -5,7 +5,6 @@
     
     <!-- Settings Categories -->
     <string name="settings_video_quality">Qualité Vidéo</string>
-    <string name="settings_audio_quality">Qualité Audio</string>
     <string name="settings_network">Paramètres Réseau</string>
     <string name="settings_language">Langue</string>
     <string name="settings_http_auth">Authentification HTTP Basic</string>
@@ -17,10 +16,6 @@
     <string name="settings_camera_fps">FPS de la caméra</string>
     <string name="settings_stream_delay">Délai</string>
     <string name="settings_stream_delay_summary">Délai entre les images en ms (0 = sans délai)</string>
-    
-    <!-- Audio Quality Settings -->
-    <string name="settings_audio_channels">Canaux audio</string>
-    <string name="settings_audio_sample_rate">Fréquence d\'échantillonnage</string>
     
     <!-- Network Settings -->
     <string name="settings_stream_port">Port de connexion</string>
@@ -63,8 +58,7 @@
     <string name="ip_label_lan_wifi">LAN/Wi-Fi</string>
     <string name="ip_label_4g_5g">4G/5G</string>
     
-    <!-- App Version -->
-    <string name="settings_app_version">Ver: ADAS3 Android Client v0.5 Alpha</string>
-    <string name="settings_app_version_summary">Ver: ADAS3 Android Client v0.5 Alpha</string>
+    <!-- GitHub Logo -->
+    <string name="github_logo_description">Ouvrir le dépôt sur GitHub</string>
 </resources>
 

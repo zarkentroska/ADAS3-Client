@@ -31,23 +31,6 @@
             android:inputType="number" />
     </PreferenceCategory>
     <PreferenceCategory
-        android:title="@string/settings_audio_quality">
-        <ListPreference
-            android:key="audio_channels"
-            android:title="@string/settings_audio_channels"
-            android:summary="%s"
-            android:defaultValue="stereo"
-            android:entries="@array/audio_channels_entries"
-            android:entryValues="@array/audio_channels_values" />
-        <ListPreference
-            android:key="audio_sample_rate"
-            android:title="@string/settings_audio_sample_rate"
-            android:summary="%s"
-            android:defaultValue="44100"
-            android:entries="@array/audio_sample_rate_entries"
-            android:entryValues="@array/audio_sample_rate_values" />
-    </PreferenceCategory>
-    <PreferenceCategory
         android:title="@string/settings_network">
         <EditTextPreference
             android:key="stream_port"
@@ -106,7 +89,7 @@
             android:dependency="use_certificate" />
     </PreferenceCategory>
     <Preference
-        android:key="app_version"
-        android:title="@string/settings_app_version"
-        android:summary="@string/settings_app_version_summary" />
+        android:key="github_info"
+        android:layout="@layout/preference_github"
+        android:selectable="false" />
 </PreferenceScreen>

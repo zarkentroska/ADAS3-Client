@@ -19,6 +19,8 @@ import androidx.fragment.app.FragmentManager
 import androidx.preference.ListPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
+import androidx.recyclerview.widget.RecyclerView
+import android.net.Uri
 import com.github.digitallyrefined.androidipcamera.helpers.CameraResolutionHelper
 
 class SettingsDialogFragment : DialogFragment() {
@@ -236,10 +238,154 @@ class SettingsFragment : PreferenceFragmentCompat() {
             summary = text ?: "8080"
         }
         
-        // Set up app version preference (non-clickable, just display)
-        findPreference<Preference>("app_version")?.apply {
-            summary = getString(R.string.settings_app_version_summary)
+        // Set up GitHub logo preference - layout is already set in XML
+        findPreference<Preference>("github_info")?.apply {
             isSelectable = false
+        }
+    }
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        // Find the RecyclerView that displays preferences and set up GitHub logo button
+        view.findViewById<RecyclerView>(androidx.preference.R.id.recycler_view)?.let { recyclerView ->
+            setupGitHubButtonWithObserver(recyclerView)
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun setupGitHubButtonWithObserver(recyclerView: RecyclerView) {
+        // Wrap the adapter to intercept onBindViewHolder
+        val originalAdapter = recyclerView.adapter
+        if (originalAdapter != null && originalAdapter !is PreferenceAdapterWrapper) {
+            try {
+                val wrappedAdapter = PreferenceAdapterWrapper(
+                    originalAdapter as RecyclerView.Adapter<RecyclerView.ViewHolder>, 
+                    this
+                )
+                recyclerView.adapter = wrappedAdapter
+            } catch (e: Exception) {
+                android.util.Log.w("SettingsActivity", "Could not wrap adapter: ${e.message}")
+            }
+        }
+        
+        // Also try to set it up immediately and with delays as fallback
+        recyclerView.post {
+            setupGitHubButton(recyclerView)
+        }
+        recyclerView.postDelayed({
+            setupGitHubButton(recyclerView)
+        }, 100)
+        recyclerView.postDelayed({
+            setupGitHubButton(recyclerView)
+        }, 500)
+    }
+
+    private fun setupGitHubButton(recyclerView: RecyclerView) {
+        // Find GitHub logo button in any of the preference views recursively
+        for (i in 0 until recyclerView.childCount) {
+            val childView = recyclerView.getChildAt(i)
+            val logoButton = findViewRecursive(childView, R.id.github_logo_button, android.widget.ImageButton::class.java)
+            if (logoButton != null && logoButton.tag != "github_configured") {
+                logoButton.tag = "github_configured"
+                logoButton.setOnClickListener {
+                    try {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/zarkentroska/ADAS3-Client"))
+                        startActivity(intent)
+                    } catch (e: Exception) {
+                        android.util.Log.e("SettingsActivity", "Error opening GitHub URL: ${e.message}")
+                    }
+                }
+                
+                // Ensure the copyright text is visible
+                findViewRecursive(childView, R.id.copyright_text, android.widget.TextView::class.java)?.apply {
+                    visibility = View.VISIBLE
+                    text = "ADAS3 Client v0.5 | Copyright (C) 2026 GNU GPL 3.0"
+                }
+                
+                android.util.Log.d("SettingsActivity", "GitHub button configured successfully")
+                return
+            }
+        }
+    }
+
+    private fun <T : View> findViewRecursive(parent: View, id: Int, viewClass: Class<T>): T? {
+        if (parent.id == id && viewClass.isInstance(parent)) {
+            @Suppress("UNCHECKED_CAST")
+            return parent as T
+        }
+        if (parent is ViewGroup) {
+            for (i in 0 until parent.childCount) {
+                val child = parent.getChildAt(i)
+                val found = findViewRecursive(child, id, viewClass)
+                if (found != null) {
+                    return found
+                }
+            }
+        }
+        return null
+    }
+
+    // Wrapper class to intercept onBindViewHolder
+    @Suppress("UNCHECKED_CAST")
+    private class PreferenceAdapterWrapper(
+        private val originalAdapter: RecyclerView.Adapter<RecyclerView.ViewHolder>,
+        private val fragment: SettingsFragment
+    ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+        
+        init {
+            // Forward all adapter events
+            originalAdapter.registerAdapterDataObserver(object : RecyclerView.AdapterDataObserver() {
+                override fun onChanged() {
+                    notifyDataSetChanged()
+                }
+                override fun onItemRangeInserted(positionStart: Int, itemCount: Int) {
+                    notifyItemRangeInserted(positionStart, itemCount)
+                }
+                override fun onItemRangeRemoved(positionStart: Int, itemCount: Int) {
+                    notifyItemRangeRemoved(positionStart, itemCount)
+                }
+                override fun onItemRangeChanged(positionStart: Int, itemCount: Int) {
+                    notifyItemRangeChanged(positionStart, itemCount)
+                }
+            })
+        }
+        
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+            return originalAdapter.onCreateViewHolder(parent, viewType)
+        }
+        
+        override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+            originalAdapter.onBindViewHolder(holder, position)
+            
+            // After binding, try to configure GitHub button
+            holder.itemView.post {
+                fragment.setupGitHubButtonFromViewHolder(holder.itemView)
+            }
+        }
+        
+        override fun getItemCount(): Int = originalAdapter.itemCount
+        override fun getItemViewType(position: Int): Int = originalAdapter.getItemViewType(position)
+    }
+    
+    private fun setupGitHubButtonFromViewHolder(itemView: View) {
+        val logoButton = findViewRecursive(itemView, R.id.github_logo_button, android.widget.ImageButton::class.java)
+        if (logoButton != null && logoButton.tag != "github_configured") {
+            logoButton.tag = "github_configured"
+            logoButton.setOnClickListener {
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/zarkentroska/ADAS3-Client"))
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    android.util.Log.e("SettingsActivity", "Error opening GitHub URL: ${e.message}")
+                }
+            }
+            
+            findViewRecursive(itemView, R.id.copyright_text, android.widget.TextView::class.java)?.apply {
+                visibility = View.VISIBLE
+                text = "ADAS3 Client v0.5 | Copyright (C) 2026 GNU GPL 3.0"
+            }
+            
+            android.util.Log.d("SettingsActivity", "GitHub button configured from ViewHolder")
         }
     }
 

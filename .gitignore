@@ -12,3 +12,9 @@ app/release
 signing.properties
 app/signing-key.jks
 certificates
+
+# Tokens y secretos
+.github_token
+*.token
+.env
+*.keystore
