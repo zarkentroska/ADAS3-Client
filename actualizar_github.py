@@ -22,7 +22,7 @@ except ImportError:
 
 # Configuración
 PROJECT = Path("/home/zarkentroska/others/ADAS3 Android Client")
-REPO = "zarkentroska/ADAS3-Android-Client"
+REPO = "zarkentroska/ADAS3-Client"
 RELEASE_TAG = "v0.5Alpha"
 
 # Leer token desde variable de entorno o archivo local (no versionado)

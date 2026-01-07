@@ -196,5 +196,5 @@ else:
 print("\n" + "="*70)
 print("  ¡COMPLETADO!")
 print("="*70)
-print(f"\nRepositorio: https://github.com/zarkentroska/ADAS3-Android-Client\n")
+print(f"\nRepositorio: https://github.com/zarkentroska/ADAS3-Client\n")
 
