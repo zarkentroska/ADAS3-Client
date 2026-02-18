@@ -53,6 +53,7 @@ import com.github.digitallyrefined.androidipcamera.databinding.ActivityMainBindi
 import com.github.digitallyrefined.androidipcamera.helpers.AudioCaptureHelper
 import com.github.digitallyrefined.androidipcamera.helpers.CameraResolutionHelper
 import com.github.digitallyrefined.androidipcamera.helpers.StreamingServerHelper
+import com.github.digitallyrefined.androidipcamera.helpers.TinySACommandParser
 import com.github.digitallyrefined.androidipcamera.helpers.TinySAHelper
 import com.github.digitallyrefined.androidipcamera.helpers.convertNV21toJPEG
 import com.github.digitallyrefined.androidipcamera.helpers.convertYUV420toNV21
@@ -88,6 +89,12 @@ class MainActivity : AppCompatActivity() {
     private val USB_PERMISSION_REQUEST = 100
     private val tailscaleUpdateHandler = Handler(Looper.getMainLooper())
     private var tailscaleUpdateRunnable: Runnable? = null
+    private val ipAutoRefreshHandler = Handler(Looper.getMainLooper())
+    private var ipAutoRefreshRunnable: Runnable? = null
+    @Volatile private var hasServerConnection = false
+    private var hasRequestedAudioPermission = false
+    private var currentServerBindIp: String? = null
+    private var shouldRestartServerOnResume = false
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         when (key) {
             "image_quality", "stream_delay" -> {
@@ -164,30 +171,6 @@ class MainActivity : AppCompatActivity() {
             Log.e(TAG, "Error in processImage: ${e.message}", e)
         } finally {
             image.close()
-        }
-    }
-
-    private fun startStreamingServer() {
-        try {
-            // Get certificate path from preferences
-            val prefs = PreferenceManager.getDefaultSharedPreferences(this)
-            val useCertificate = prefs.getBoolean("use_certificate", false)
-            val certificatePath = if (useCertificate) prefs.getString("certificate_path", null) else null
-            val certificatePassword = if (useCertificate) {
-                prefs.getString("certificate_password", "")?.let {
-                    if (it.isEmpty()) null else it.toCharArray()
-                }
-            } else null
-
-            // Create server socket with specific bind address
-            val streamPortForServer = getStreamPort()
-            streamingServerHelper = StreamingServerHelper(this, streamPortForServer)
-            streamingServerHelper?.startStreamingServer()
-
-            Log.i(TAG, "Server started on port $streamPortForServer (${if (certificatePath != null) "HTTPS" else "HTTP"})")
-
-        } catch (e: IOException) {
-            Log.e(TAG, "Could not start server: ${e.message}")
         }
     }
 
@@ -276,8 +259,8 @@ class MainActivity : AppCompatActivity() {
             streamPort,
             maxClients = MAX_CLIENTS,
             onLog = { Log.d(TAG, it) },
-            onClientConnected = {},
-            onClientDisconnected = {},
+            onClientConnected = { handleStreamingClientConnected() },
+            onClientDisconnected = { handleStreamingClientDisconnected() },
             onTinySACommand = { commandBody ->
                 handleTinySACommand(commandBody)
             },
@@ -286,6 +269,7 @@ class MainActivity : AppCompatActivity() {
             },
             bindIpAddress = bindIp
         )
+        currentServerBindIp = bindIp
         // Configure audio settings for HTTP headers (fixed to Mono 44100 Hz)
         streamingServerHelper?.audioSampleRate = audioSampleRatePref
         streamingServerHelper?.audioChannels = audioChannelsPref
@@ -405,6 +389,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             // Only if no IP was ever saved, use first non-ADB IP and save it
             val firstNonAdbItem = spinnerItems.firstOrNull { !it.startsWith("ADB") } ?: spinnerItems.firstOrNull() ?: ""
+            val firstNonAdbIndex = spinnerItems.indexOf(firstNonAdbItem).takeIf { it >= 0 } ?: 0
             if (firstNonAdbItem.isNotEmpty()) {
                 val firstIp = if (firstNonAdbItem.startsWith("ADB")) {
                     "ADB"
@@ -415,10 +400,11 @@ class MainActivity : AppCompatActivity() {
                     prefs.edit().putString("selected_bind_ip", firstIp).apply()
                 }
             }
-            0
+            firstNonAdbIndex
         }
         
         ipAddressSpinner.setSelection(selectedIndex)
+        syncServerBindWithSpinnerSelection(ipAddressSpinner)
         
         // Setup refresh button
         val refreshIpButton = findViewById<ImageButton>(R.id.refreshIpButton)
@@ -433,7 +419,7 @@ class MainActivity : AppCompatActivity() {
         var isInitialSelection = true
         ipAddressSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
-                if (position < 0 || position >= spinnerItems.size) return
+                val selectedIpWithPort = parent?.getItemAtPosition(position)?.toString() ?: return
                 
                 // Skip the initial selection event when setting up the spinner
                 if (isInitialSelection) {
@@ -441,7 +427,6 @@ class MainActivity : AppCompatActivity() {
                     return
                 }
                 
-                val selectedIpWithPort = spinnerItems[position]
                 val selectedIp = if (selectedIpWithPort.startsWith("ADB")) {
                     "ADB"
                 } else {
@@ -455,22 +440,15 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     selectedIp
                 }
+                val previousIp = prefs.getString("selected_bind_ip", null)
+                if (previousIp == ipToSave) {
+                    return
+                }
                 prefs.edit().putString("selected_bind_ip", ipToSave).apply()
                 
                 // Determine bind IP: use 127.0.0.1 for ADB, otherwise use selected IP
-                val bindIp = if (selectedIpWithPort.startsWith("ADB")) {
-                    "127.0.0.1"
-                } else {
-                    selectedIp
-                }
-                
-                // Update server bind IP and restart
-                streamingServerHelper?.updateBindIpAddress(bindIp)
-                lifecycleScope.launch(Dispatchers.IO) {
-                    streamingServerHelper?.stopStreamingServer()
-                    kotlinx.coroutines.delay(500) // Small delay to ensure clean shutdown
-                    streamingServerHelper?.startStreamingServer()
-                }
+                val bindIp = if (selectedIpWithPort.startsWith("ADB")) "127.0.0.1" else selectedIp
+                updateServerBindIfNeeded(bindIp)
                 
                 Log.d(TAG, "User changed bind IP to: $bindIp (${if (selectedIpWithPort.startsWith("ADB")) "ADB mode" else "normal"})")
             }
@@ -522,9 +500,11 @@ class MainActivity : AppCompatActivity() {
             toggleAudio()
             updateAudioButtonIcon(audioToggleButton)
         }
+        enableAudioByDefault(audioToggleButton)
         
         // Register connectivity change listener
         registerConnectivityListener()
+        startAutoIpRefreshUntilConnected()
     }
     
     private fun registerConnectivityListener() {
@@ -661,6 +641,8 @@ class MainActivity : AppCompatActivity() {
         if (requestCode == REQUEST_CODE_PERMISSIONS) {
             if (allPermissionsGranted()) {
                 startCamera()
+                findViewById<ImageButton>(R.id.audioToggleButton)?.let { enableAudioByDefault(it) }
+                ensureAudioPermissionRequested()
             } else {
                 // Show which permissions are missing
                 REQUIRED_PERMISSIONS.filter {
@@ -970,6 +952,7 @@ class MainActivity : AppCompatActivity() {
         }
         
         ipAddressSpinner.setSelection(selectedIndex)
+        syncServerBindWithSpinnerSelection(ipAddressSpinner)
         
         // DO NOT update saved IP automatically - only update if user manually selects
         // The saved IP remains unchanged until user explicitly changes it
@@ -978,6 +961,56 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, getString(R.string.toast_ips_updated), Toast.LENGTH_SHORT).show()
         }
         Log.d(TAG, "IP spinner refreshed. Found ${ipAddresses.size} IPs")
+    }
+
+    private fun hasActiveStreamingClients(): Boolean {
+        val helper = streamingServerHelper ?: return false
+        return helper.getVideoClients().isNotEmpty() || helper.getAudioClients().isNotEmpty()
+    }
+
+    private fun handleStreamingClientConnected() {
+        runOnUiThread {
+            if (!hasActiveStreamingClients()) return@runOnUiThread
+            if (!hasServerConnection) {
+                hasServerConnection = true
+                stopAutoIpRefresh()
+                Toast.makeText(
+                    this,
+                    getString(R.string.toast_server_connection_established),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
+    private fun handleStreamingClientDisconnected() {
+        runOnUiThread {
+            if (!hasActiveStreamingClients()) {
+                hasServerConnection = false
+                startAutoIpRefreshUntilConnected()
+            }
+        }
+    }
+
+    private fun startAutoIpRefreshUntilConnected() {
+        if (ipAutoRefreshRunnable != null) return
+        ipAutoRefreshRunnable = object : Runnable {
+            override fun run() {
+                if (hasServerConnection || hasActiveStreamingClients()) {
+                    hasServerConnection = true
+                    stopAutoIpRefresh()
+                    return
+                }
+                refreshIpSpinner(showToast = false)
+                ipAutoRefreshHandler.postDelayed(this, IP_AUTO_REFRESH_INTERVAL_MS)
+            }
+        }
+        ipAutoRefreshHandler.postDelayed(ipAutoRefreshRunnable!!, IP_AUTO_REFRESH_INTERVAL_MS)
+    }
+
+    private fun stopAutoIpRefresh() {
+        ipAutoRefreshRunnable?.let { ipAutoRefreshHandler.removeCallbacks(it) }
+        ipAutoRefreshRunnable = null
     }
     
     private fun isTailscaleInstalled(): Boolean {
@@ -1388,6 +1421,71 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
+    private fun enableAudioByDefault(audioToggleButton: ImageButton) {
+        if (isAudioEnabled) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            if (audioCaptureHelper?.startRecording() == true) {
+                isAudioEnabled = true
+                updateAudioButtonIcon(audioToggleButton)
+                Toast.makeText(this, getString(R.string.toast_audio_enabled), Toast.LENGTH_SHORT).show()
+            }
+        } else if (!hasRequestedAudioPermission) {
+            hasRequestedAudioPermission = true
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_CODE_AUDIO_PERMISSION)
+        }
+    }
+
+    private fun ensureAudioPermissionRequested() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+        if (!hasRequestedAudioPermission) {
+            hasRequestedAudioPermission = true
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_CODE_AUDIO_PERMISSION)
+        }
+    }
+
+    private fun getBindIpFromSpinnerItem(item: String): String {
+        return if (item.startsWith("ADB")) "127.0.0.1" else item.substringBefore(":").substringBefore(" (")
+    }
+
+    private fun syncServerBindWithSpinnerSelection(spinner: android.widget.Spinner) {
+        val selectedItem = spinner.selectedItem?.toString() ?: return
+        val bindIp = getBindIpFromSpinnerItem(selectedItem)
+        updateServerBindIfNeeded(bindIp)
+    }
+
+    private fun updateServerBindIfNeeded(bindIp: String) {
+        if (bindIp == currentServerBindIp) {
+            return
+        }
+
+        currentServerBindIp = bindIp
+        streamingServerHelper?.updateBindIpAddress(bindIp)
+        restartStreamingServer()
+        hasServerConnection = false
+        startAutoIpRefreshUntilConnected()
+    }
+
+    private fun restartStreamingServer() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            streamingServerHelper?.stopStreamingServer()
+            kotlinx.coroutines.delay(500) // Small delay to ensure clean shutdown
+            streamingServerHelper?.startStreamingServer()
+        }
+    }
+
+    private fun syncServerBindWithCurrentSelection() {
+        val ipAddressSpinner = findViewById<android.widget.Spinner>(R.id.ipAddressSpinner) ?: return
+        syncServerBindWithSpinnerSelection(ipAddressSpinner)
+    }
     
     private fun updateAudioButtonIcon(button: ImageButton) {
         if (isAudioEnabled) {
@@ -1405,6 +1503,26 @@ class MainActivity : AppCompatActivity() {
         
         // Refresh IP spinner when activity resumes (silently, no toast)
         refreshIpSpinner(showToast = false)
+        syncServerBindWithCurrentSelection()
+        if (shouldRestartServerOnResume) {
+            restartStreamingServer()
+            shouldRestartServerOnResume = false
+        }
+        if (!hasServerConnection) {
+            startAutoIpRefreshUntilConnected()
+        }
+        ensureAudioPermissionRequested()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Ensure server sockets are cleanly reopened on return to avoid stale handshake state.
+        hasServerConnection = false
+        stopAutoIpRefresh()
+        shouldRestartServerOnResume = true
+        lifecycleScope.launch(Dispatchers.IO) {
+            streamingServerHelper?.stopStreamingServer()
+        }
     }
     
     override fun onDestroy() {
@@ -1423,13 +1541,14 @@ class MainActivity : AppCompatActivity() {
         audioCaptureHelper?.stopRecording()
         tinySAHelper?.stopScanning()
         tinySAHelper?.closeConnection()
-        streamingServerHelper?.closeClientConnection()
+        streamingServerHelper?.stopStreamingServer()
         stopTinySAConnectionCheck()
         unregisterUsbReceiver()
         
         // Stop Tailscale update handler
         tailscaleUpdateRunnable?.let { tailscaleUpdateHandler.removeCallbacks(it) }
         tailscaleUpdateRunnable = null
+        stopAutoIpRefresh()
     }
     
     private fun unregisterConnectivityListener() {
@@ -1638,17 +1757,13 @@ class MainActivity : AppCompatActivity() {
      */
     private fun handleTinySACommand(commandBody: String) {
         try {
-            // Parsear JSON del comando
             Log.d(TAG, "Procesando comando TinySA: $commandBody")
-            
-            // Parseo simple de JSON usando regex (más robusto que antes)
-            val actionMatch = Regex("\"action\"\\s*:\\s*\"([^\"]+)\"").find(commandBody)
-            val action = actionMatch?.groupValues?.get(1)
-            
+            val action = TinySACommandParser.parseAction(commandBody)
+
             when (action) {
                 "stop" -> {
                     tinySAHelper?.stopScanning()
-                streamingServerHelper?.dropTinySADataClients()
+                    streamingServerHelper?.dropTinySADataClients()
                     Log.d(TAG, "TinySA detenido por comando")
                 }
                 "start" -> {
@@ -1656,7 +1771,13 @@ class MainActivity : AppCompatActivity() {
                     Log.d(TAG, "TinySA iniciado por comando")
                 }
                 "set_sequence" -> {
-                    parseAndSetTinySASequence(commandBody)
+                    val configs = TinySACommandParser.parseSequence(commandBody)
+                    if (configs.isNotEmpty()) {
+                        tinySAHelper?.setSequence(configs)
+                        Log.d(TAG, "Secuencia TinySA configurada: ${configs.size} rangos")
+                    } else {
+                        Log.w(TAG, "Comando set_sequence sin rangos validos")
+                    }
                 }
                 else -> {
                     Log.w(TAG, "Acción TinySA desconocida: $action")
@@ -1667,79 +1788,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    /**
-     * Parsea y configura la secuencia de barridos de TinySA usando Gson
-     */
-    private fun parseAndSetTinySASequence(json: String) {
-        try {
-            // Parseo mejorado usando regex para encontrar objetos en el array
-            val sequenceStart = json.indexOf("\"sequence\"")
-            if (sequenceStart == -1) return
-            
-            val arrayStart = json.indexOf('[', sequenceStart)
-            if (arrayStart == -1) return
-            
-            val configs = mutableListOf<TinySAHelper.ScanConfig>()
-            
-            // Buscar todos los objetos { } en el array
-            var pos = arrayStart + 1
-            var depth = 0
-            var objStart = -1
-            
-            while (pos < json.length) {
-                when (json[pos]) {
-                    '{' -> {
-                        if (depth == 0) objStart = pos
-                        depth++
-                    }
-                    '}' -> {
-                        depth--
-                        if (depth == 0 && objStart >= 0) {
-                            val objStr = json.substring(objStart, pos + 1)
-                            val start = extractLongValue(objStr, "start") ?: continue
-                            val stop = extractLongValue(objStr, "stop") ?: continue
-                            val points = extractIntValue(objStr, "points") ?: 290
-                            val sweeps = extractIntValue(objStr, "sweeps") ?: 5
-                            val label = extractStringValue(objStr, "label") ?: ""
-                            
-                            configs.add(TinySAHelper.ScanConfig(start, stop, points, sweeps, label))
-                            objStart = -1
-                        }
-                    }
-                }
-                pos++
-            }
-            
-            if (configs.isNotEmpty()) {
-                tinySAHelper?.setSequence(configs)
-                Log.d(TAG, "Secuencia TinySA configurada: ${configs.size} rangos")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error parseando secuencia: ${e.message}", e)
-        }
-    }
-    
-    private fun extractLongValue(json: String, key: String): Long? {
-        val pattern = "\"$key\"\\s*:\\s*(\\d+)"
-        val regex = Regex(pattern)
-        return regex.find(json)?.groupValues?.get(1)?.toLongOrNull()
-    }
-    
-    private fun extractIntValue(json: String, key: String): Int? {
-        val pattern = "\"$key\"\\s*:\\s*(\\d+)"
-        val regex = Regex(pattern)
-        return regex.find(json)?.groupValues?.get(1)?.toIntOrNull()
-    }
-    
-    private fun extractStringValue(json: String, key: String): String? {
-        val pattern = "\"$key\"\\s*:\\s*\"([^\"]+)\""
-        val regex = Regex(pattern)
-        return regex.find(json)?.groupValues?.get(1)
-    }
-    
     companion object {
         private const val TAG = "MainActivity"
-        private const val STREAM_PORT = 8080
+        private const val IP_AUTO_REFRESH_INTERVAL_MS = 2000L
         private const val REQUEST_CODE_PERMISSIONS = 10
         private const val REQUEST_CODE_AUDIO_PERMISSION = 11
         private const val MAX_CLIENTS = 3  // Limit concurrent connections

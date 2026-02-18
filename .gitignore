@@ -18,3 +18,5 @@ certificates
 *.token
 .env
 *.keystore
+*.log
+__pycache__/

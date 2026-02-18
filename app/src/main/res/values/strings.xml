@@ -52,6 +52,7 @@
     <string name="toast_tailscale_cannot_open">No se pudo abrir Tailscale. Intenta abrirlo manualmente desde el launcher.</string>
     <string name="toast_tailscale_play_store">Abriendo Google Play Store para instalar Tailscale…</string>
     <string name="toast_invalid_port">Puerto inválido. Debe estar entre 1 y 65535</string>
+    <string name="toast_server_connection_established">Conexión establecida con el servidor</string>
     
     <!-- IP Labels -->
     <string name="ip_label_tailscale">Tailscale</string>

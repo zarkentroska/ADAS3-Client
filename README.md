@@ -23,13 +23,13 @@ Android application that acts as a remote streaming node for the ADAS3 drone det
   <table>
     <tr>
       <td align="center" width="33%">
-        <img src="https://raw.githubusercontent.com/zarkentroska/ADAS3-Client/main/interfaz1.jpg" alt="ADAS3 Client Interface 1" width="200">
+        <img src="https://raw.githubusercontent.com/zarkentroska/ADAS3-Client/main/images/interfaz1.jpg" alt="ADAS3 Client Interface 1" width="200">
       </td>
       <td align="center" width="33%">
-        <img src="https://raw.githubusercontent.com/zarkentroska/ADAS3-Client/main/interfaz2.jpg" alt="ADAS3 Client Interface 2" width="200">
+        <img src="https://raw.githubusercontent.com/zarkentroska/ADAS3-Client/main/images/interfaz2.jpg" alt="ADAS3 Client Interface 2" width="200">
       </td>
       <td align="center" width="33%">
-        <img src="https://raw.githubusercontent.com/zarkentroska/ADAS3-Client/main/interfaz3.jpg" alt="ADAS3 Client Interface 3" width="200">
+        <img src="https://raw.githubusercontent.com/zarkentroska/ADAS3-Client/main/images/interfaz3.jpg" alt="ADAS3 Client Interface 3" width="200">
       </td>
     </tr>
   </table>
@@ -227,6 +227,7 @@ ADAS3-Client/
 │   │   ├── kotlin/.../helpers/
 │   │   │   ├── AudioCaptureHelper.kt
 │   │   │   ├── CameraResolutionHelper.kt
+│   │   │   ├── TinySACommandParser.kt
 │   │   │   ├── StreamingServerHelper.kt
 │   │   │   └── TinySAHelper.kt
 │   │   └── res/
@@ -236,6 +237,11 @@ ADAS3-Client/
 │   │       ├── values-it/ (Italian)
 │   │       └── values-pt/ (Portuguese)
 │   └── build.gradle
+├── scripts/
+│   ├── dev/
+│   └── release/
+├── docs/
+│   └── maintenance-scripts.md
 ├── build.gradle.kts
 └── settings.gradle.kts
 ```
