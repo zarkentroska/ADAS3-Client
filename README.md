@@ -1,6 +1,6 @@
 # ADAS3 Android Client
 
-**Version:** 0.5 Alpha
+**Version:** 0.6 Alpha
 
 <div align="left">
   <a href="https://kotlinlang.org/">
@@ -49,6 +49,7 @@ Android application that acts as a remote streaming node for the ADAS3 drone det
 ### 🔊 Audio
 - **Real-time audio capture**
 - **Mono 44100 Hz Standard**
+- **Enabled by default** at startup (with runtime permission flow)
 - **Quick enable/disable** via button
 
 ### 🌐 Connection options
@@ -135,8 +136,9 @@ When opening the application for the first time, the following default values wi
 - **Image quality**: 50%
 - **FPS**: 30 FPS Mode 2
 - **Delay**: 0 ms
-- **Audio channels**: Stereo
+- **Audio channels**: Mono
 - **Sample rate**: 44100 Hz
+- **Audio state**: Enabled by default
 - **Port**: 8080
 - **Language**: Spanish
 
@@ -237,11 +239,19 @@ ADAS3-Client/
 │   │       ├── values-it/ (Italian)
 │   │       └── values-pt/ (Portuguese)
 │   └── build.gradle
+├── images/
+│   ├── ADAS3.png
+│   ├── ghlogo.png
+│   ├── interfaz1.jpg
+│   ├── interfaz2.jpg
+│   └── interfaz3.jpg
 ├── scripts/
 │   ├── dev/
 │   └── release/
 ├── docs/
 │   └── maintenance-scripts.md
+├── gradlew
+├── gradlew.bat
 ├── build.gradle.kts
 └── settings.gradle.kts
 ```
@@ -258,6 +268,14 @@ ADAS3-Client/
 See [LICENSE](LICENSE) file for details.
 
 ## 🔄 Version history
+
+### v0.6 Alpha
+- Project structure cleanup: assets and scripts reorganized into dedicated folders
+- Removed obsolete root artifacts and maintenance leftovers
+- Added safer TinySA command parsing helper for maintainability
+- Improved startup audio flow (auto-enable with permission handling)
+- Improved connection handshake reliability and reconnection behavior
+- Added automatic IP refresh until client-server connection is established
 
 ### v0.5 Alpha
 - Initial version with all main features
