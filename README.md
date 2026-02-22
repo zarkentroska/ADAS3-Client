@@ -1,6 +1,6 @@
 # ADAS3 Android Client
 
-**Version:** 0.6 Alpha
+**Version:** 0.7 Alpha
 
 <div align="left">
   <a href="https://kotlinlang.org/">
@@ -268,6 +268,13 @@ ADAS3-Client/
 See [LICENSE](LICENSE) file for details.
 
 ## 🔄 Version history
+
+### v0.7 Alpha
+- Added persistent server connection status badge (ON/OFF) with multilingual labels
+- Added in-app detection HUD with session counters (YOLO/TensorFlow/RF)
+- Added detection details popup showing recent events while keeping camera preview active
+- Added server-to-client detection endpoint (`POST /adas3/detection-event`) to receive worker notifications
+- Improved LAN discovery integration to support detection event routing from ADAS3 Server
 
 ### v0.6 Alpha
 - Project structure cleanup: assets and scripts reorganized into dedicated folders

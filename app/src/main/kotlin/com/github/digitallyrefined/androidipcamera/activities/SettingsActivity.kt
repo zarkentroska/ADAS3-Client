@@ -299,7 +299,7 @@ class SettingsFragment : PreferenceFragmentCompat() {
                 // Ensure the copyright text is visible
                 findViewRecursive(childView, R.id.copyright_text, android.widget.TextView::class.java)?.apply {
                     visibility = View.VISIBLE
-                    text = "ADAS3 Client v0.5 | Copyright (C) 2026 GNU GPL 3.0"
+                    text = "ADAS3 Client v0.7 | Copyright (C) 2026 GNU GPL 3.0"
                 }
                 
                 android.util.Log.d("SettingsActivity", "GitHub button configured successfully")
@@ -382,7 +382,7 @@ class SettingsFragment : PreferenceFragmentCompat() {
             
             findViewRecursive(itemView, R.id.copyright_text, android.widget.TextView::class.java)?.apply {
                 visibility = View.VISIBLE
-                text = "ADAS3 Client v0.5 | Copyright (C) 2026 GNU GPL 3.0"
+                text = "ADAS3 Client v0.7 | Copyright (C) 2026 GNU GPL 3.0"
             }
             
             android.util.Log.d("SettingsActivity", "GitHub button configured from ViewHolder")

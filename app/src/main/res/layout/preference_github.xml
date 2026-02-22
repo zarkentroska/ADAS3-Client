@@ -26,7 +26,7 @@
         android:layout_height="wrap_content"
         android:layout_weight="1"
         android:layout_marginStart="12dp"
-        android:text="ADAS3 Client v0.5 | Copyright (C) 2026 GNU GPL 3.0"
+        android:text="ADAS3 Client v0.7 | Copyright (C) 2026 GNU GPL 3.0"
         android:textSize="12sp"
         android:textColor="?android:attr/textColorSecondary"
         android:gravity="center_vertical"

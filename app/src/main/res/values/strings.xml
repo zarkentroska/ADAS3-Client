@@ -53,6 +53,19 @@
     <string name="toast_tailscale_play_store">Abriendo Google Play Store para instalar Tailscale…</string>
     <string name="toast_invalid_port">Puerto inválido. Debe estar entre 1 y 65535</string>
     <string name="toast_server_connection_established">Conexión establecida con el servidor</string>
+    <string name="server_connection_on">Conexión con server: ON</string>
+    <string name="server_connection_off">Conexión con server: OFF</string>
+    <string name="detection_session_summary">Sesión: %1$d det. YOLO, %2$d det. TensorFlow, %3$d det. RF</string>
+    <string name="detection_details_button_description">Mostrar detalles de detecciones</string>
+    <string name="detection_details_title">Detalles de detección</string>
+    <string name="detection_details_session_counts">Sesión: %1$d det. YOLO, %2$d det. TensorFlow, %3$d det. RF</string>
+    <string name="detection_details_recent_title">Eventos recientes</string>
+    <string name="detection_details_empty">Aún no se recibieron detecciones</string>
+    <string name="detection_type_yolo">YOLO</string>
+    <string name="detection_type_tensorflow">TensorFlow</string>
+    <string name="detection_type_rf">RF</string>
+    <string name="detection_event_confidence">conf.</string>
+    <string name="detection_event_frequency">freq.</string>
     
     <!-- IP Labels -->
     <string name="ip_label_tailscale">Tailscale</string>

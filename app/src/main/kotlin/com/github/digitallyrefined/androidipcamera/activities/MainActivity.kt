@@ -19,6 +19,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.graphics.Color
 import android.util.Log
 import android.util.Size
 import android.view.View
@@ -29,6 +30,7 @@ import android.widget.Button
 import android.widget.TextView
 import android.widget.ImageButton
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -52,6 +54,7 @@ import java.util.Locale
 import com.github.digitallyrefined.androidipcamera.databinding.ActivityMainBinding
 import com.github.digitallyrefined.androidipcamera.helpers.AudioCaptureHelper
 import com.github.digitallyrefined.androidipcamera.helpers.CameraResolutionHelper
+import com.github.digitallyrefined.androidipcamera.helpers.LanDiscoveryBeaconHelper
 import com.github.digitallyrefined.androidipcamera.helpers.StreamingServerHelper
 import com.github.digitallyrefined.androidipcamera.helpers.TinySACommandParser
 import com.github.digitallyrefined.androidipcamera.helpers.TinySAHelper
@@ -95,6 +98,13 @@ class MainActivity : AppCompatActivity() {
     private var hasRequestedAudioPermission = false
     private var currentServerBindIp: String? = null
     private var shouldRestartServerOnResume = false
+    private var lanDiscoveryBeaconHelper: LanDiscoveryBeaconHelper? = null
+    private var serverConnectionStatusText: TextView? = null
+    private var detectionSessionText: TextView? = null
+    private var yoloDetections = 0
+    private var tensorflowDetections = 0
+    private var rfDetections = 0
+    private val recentDetectionEvents = mutableListOf<String>()
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         when (key) {
             "image_quality", "stream_delay" -> {
@@ -264,6 +274,9 @@ class MainActivity : AppCompatActivity() {
             onTinySACommand = { commandBody ->
                 handleTinySACommand(commandBody)
             },
+            onDetectionEvent = { detectionEvent ->
+                handleDetectionEvent(detectionEvent)
+            },
             getTinySAStatus = {
                 isTinySAConnected
             },
@@ -273,8 +286,12 @@ class MainActivity : AppCompatActivity() {
         // Configure audio settings for HTTP headers (fixed to Mono 44100 Hz)
         streamingServerHelper?.audioSampleRate = audioSampleRatePref
         streamingServerHelper?.audioChannels = audioChannelsPref
+        lanDiscoveryBeaconHelper = LanDiscoveryBeaconHelper(
+            onLog = { Log.d(TAG, "[Discovery] $it") }
+        )
         
         lifecycleScope.launch(Dispatchers.IO) { streamingServerHelper?.startStreamingServer() }
+        startLanDiscoveryBeacon()
         
         // Initialize TinySA helper (with error handling)
         try {
@@ -323,6 +340,13 @@ class MainActivity : AppCompatActivity() {
         // Find the Spinner and TextView
         val ipAddressSpinner = findViewById<android.widget.Spinner>(R.id.ipAddressSpinner)
         val ipAddressText = findViewById<TextView>(R.id.ipAddressText)
+        serverConnectionStatusText = findViewById(R.id.serverConnectionStatusText)
+        detectionSessionText = findViewById(R.id.detectionSessionText)
+        findViewById<ImageButton>(R.id.detectionDetailsButton)?.setOnClickListener {
+            showDetectionDetailsDialog()
+        }
+        updateServerConnectionIndicator(hasServerConnection)
+        updateDetectionSessionSummary()
         
         // Hide the TextView to avoid duplication
         ipAddressText.visibility = View.GONE
@@ -974,6 +998,7 @@ class MainActivity : AppCompatActivity() {
             if (!hasServerConnection) {
                 hasServerConnection = true
                 stopAutoIpRefresh()
+                updateServerConnectionIndicator(true)
                 Toast.makeText(
                     this,
                     getString(R.string.toast_server_connection_established),
@@ -987,6 +1012,7 @@ class MainActivity : AppCompatActivity() {
         runOnUiThread {
             if (!hasActiveStreamingClients()) {
                 hasServerConnection = false
+                updateServerConnectionIndicator(false)
                 startAutoIpRefreshUntilConnected()
             }
         }
@@ -999,6 +1025,7 @@ class MainActivity : AppCompatActivity() {
                 if (hasServerConnection || hasActiveStreamingClients()) {
                     hasServerConnection = true
                     stopAutoIpRefresh()
+                    updateServerConnectionIndicator(true)
                     return
                 }
                 refreshIpSpinner(showToast = false)
@@ -1006,6 +1033,75 @@ class MainActivity : AppCompatActivity() {
             }
         }
         ipAutoRefreshHandler.postDelayed(ipAutoRefreshRunnable!!, IP_AUTO_REFRESH_INTERVAL_MS)
+    }
+
+    private fun handleDetectionEvent(event: StreamingServerHelper.DetectionEvent) {
+        runOnUiThread {
+            when (event.event) {
+                "yolo" -> yoloDetections++
+                "tensorflow" -> tensorflowDetections++
+                "rf" -> rfDetections++
+            }
+            recentDetectionEvents.add(0, buildDetectionEventLine(event))
+            while (recentDetectionEvents.size > MAX_RECENT_DETECTIONS) {
+                recentDetectionEvents.removeAt(recentDetectionEvents.lastIndex)
+            }
+            updateDetectionSessionSummary()
+        }
+    }
+
+    private fun buildDetectionEventLine(event: StreamingServerHelper.DetectionEvent): String {
+        val label = when (event.event) {
+            "yolo" -> getString(R.string.detection_type_yolo)
+            "tensorflow" -> getString(R.string.detection_type_tensorflow)
+            "rf" -> getString(R.string.detection_type_rf)
+            else -> event.event
+        }
+        val time = event.time ?: java.text.SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(java.util.Date())
+        val details = mutableListOf<String>()
+        event.confidencePercent?.let {
+            details.add("${getString(R.string.detection_event_confidence)} $it%")
+        } ?: event.confidence?.let {
+            details.add("${getString(R.string.detection_event_confidence)} ${(it * 100).toInt()}%")
+        }
+        event.frequencyHz?.let {
+            val mhz = it / 1_000_000.0
+            details.add("${getString(R.string.detection_event_frequency)} ${"%.2f".format(Locale.US, mhz)} MHz")
+        }
+        return if (details.isEmpty()) {
+            "[$time] $label"
+        } else {
+            "[$time] $label - ${details.joinToString(", ")}"
+        }
+    }
+
+    private fun updateDetectionSessionSummary() {
+        detectionSessionText?.text = getString(
+            R.string.detection_session_summary,
+            yoloDetections,
+            tensorflowDetections,
+            rfDetections
+        )
+    }
+
+    private fun showDetectionDetailsDialog() {
+        val session = getString(
+            R.string.detection_details_session_counts,
+            yoloDetections,
+            tensorflowDetections,
+            rfDetections
+        )
+        val recentHeader = getString(R.string.detection_details_recent_title)
+        val recent = if (recentDetectionEvents.isEmpty()) {
+            getString(R.string.detection_details_empty)
+        } else {
+            recentDetectionEvents.joinToString("\n")
+        }
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.detection_details_title))
+            .setMessage("$session\n\n$recentHeader\n$recent")
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
     }
 
     private fun stopAutoIpRefresh() {
@@ -1261,6 +1357,7 @@ class MainActivity : AppCompatActivity() {
         val viewFinder = viewBinding.viewFinder
         val rootView = viewBinding.root
         val ipAddressContainer = findViewById<android.view.ViewGroup>(R.id.ipAddressContainer)
+        val detectionSessionContainer = findViewById<android.view.ViewGroup>(R.id.detectionSessionContainer)
         val settingsButton = findViewById<ImageButton>(R.id.settingsButton)
         val switchCameraButton = findViewById<ImageButton>(R.id.switchCameraButton)
         val hidePreviewButton = findViewById<ImageButton>(R.id.hidePreviewButton)
@@ -1269,6 +1366,7 @@ class MainActivity : AppCompatActivity() {
         if (viewFinder.isVisible) {
             viewFinder.visibility = View.GONE
             ipAddressContainer.visibility = View.GONE
+            detectionSessionContainer.visibility = View.GONE
             settingsButton.visibility = View.GONE
             switchCameraButton.visibility = View.GONE
             audioToggleButton.visibility = View.GONE
@@ -1277,6 +1375,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             viewFinder.visibility = View.VISIBLE
             ipAddressContainer.visibility = View.VISIBLE
+            detectionSessionContainer.visibility = View.VISIBLE
             settingsButton.visibility = View.VISIBLE
             switchCameraButton.visibility = View.VISIBLE
             audioToggleButton.visibility = View.VISIBLE
@@ -1471,7 +1570,22 @@ class MainActivity : AppCompatActivity() {
         streamingServerHelper?.updateBindIpAddress(bindIp)
         restartStreamingServer()
         hasServerConnection = false
+        updateServerConnectionIndicator(false)
         startAutoIpRefreshUntilConnected()
+        startLanDiscoveryBeacon()
+    }
+
+    private fun updateServerConnectionIndicator(connected: Boolean) {
+        runOnUiThread {
+            val statusTextView = serverConnectionStatusText ?: findViewById<TextView>(R.id.serverConnectionStatusText)
+            statusTextView ?: return@runOnUiThread
+            statusTextView.text = getString(
+                if (connected) R.string.server_connection_on else R.string.server_connection_off
+            )
+            statusTextView.setTextColor(
+                if (connected) Color.parseColor("#00FF00") else Color.parseColor("#FF4444")
+            )
+        }
     }
 
     private fun restartStreamingServer() {
@@ -1485,6 +1599,22 @@ class MainActivity : AppCompatActivity() {
     private fun syncServerBindWithCurrentSelection() {
         val ipAddressSpinner = findViewById<android.widget.Spinner>(R.id.ipAddressSpinner) ?: return
         syncServerBindWithSpinnerSelection(ipAddressSpinner)
+    }
+
+    private fun startLanDiscoveryBeacon() {
+        lanDiscoveryBeaconHelper?.start(
+            getBindIp = {
+                currentServerBindIp
+                    ?: runCatching {
+                        val ipAddressSpinner = findViewById<android.widget.Spinner>(R.id.ipAddressSpinner)
+                        val selected = ipAddressSpinner?.selectedItem?.toString()
+                        if (selected.isNullOrEmpty()) null else getBindIpFromSpinnerItem(selected)
+                    }.getOrNull()
+                    ?: getAllLocalIpAddresses().firstOrNull()
+                    ?: "127.0.0.1"
+            },
+            getStreamPort = { getStreamPort() }
+        )
     }
     
     private fun updateAudioButtonIcon(button: ImageButton) {
@@ -1508,6 +1638,7 @@ class MainActivity : AppCompatActivity() {
             restartStreamingServer()
             shouldRestartServerOnResume = false
         }
+        startLanDiscoveryBeacon()
         if (!hasServerConnection) {
             startAutoIpRefreshUntilConnected()
         }
@@ -1518,8 +1649,10 @@ class MainActivity : AppCompatActivity() {
         super.onStop()
         // Ensure server sockets are cleanly reopened on return to avoid stale handshake state.
         hasServerConnection = false
+        updateServerConnectionIndicator(false)
         stopAutoIpRefresh()
         shouldRestartServerOnResume = true
+        lanDiscoveryBeaconHelper?.stop()
         lifecycleScope.launch(Dispatchers.IO) {
             streamingServerHelper?.stopStreamingServer()
         }
@@ -1542,6 +1675,7 @@ class MainActivity : AppCompatActivity() {
         tinySAHelper?.stopScanning()
         tinySAHelper?.closeConnection()
         streamingServerHelper?.stopStreamingServer()
+        lanDiscoveryBeaconHelper?.stop()
         stopTinySAConnectionCheck()
         unregisterUsbReceiver()
         
@@ -1791,6 +1925,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "MainActivity"
         private const val IP_AUTO_REFRESH_INTERVAL_MS = 2000L
+        private const val MAX_RECENT_DETECTIONS = 25
         private const val REQUEST_CODE_PERMISSIONS = 10
         private const val REQUEST_CODE_AUDIO_PERMISSION = 11
         private const val MAX_CLIENTS = 3  // Limit concurrent connections

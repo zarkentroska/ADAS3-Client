@@ -24,6 +24,8 @@ import java.util.concurrent.CopyOnWriteArrayList
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLServerSocket
+import org.json.JSONException
+import org.json.JSONObject
 
 class StreamingServerHelper(
     private val context: Context,
@@ -33,6 +35,7 @@ class StreamingServerHelper(
     private val onClientConnected: () -> Unit = {},
     private val onClientDisconnected: () -> Unit = {},
     private val onTinySACommand: ((String) -> Unit)? = null,
+    private val onDetectionEvent: ((DetectionEvent) -> Unit)? = null,
     private val getTinySAStatus: (() -> Boolean)? = null,
     private var bindIpAddress: String? = null  // null = todas las interfaces (0.0.0.0)
 ) {
@@ -48,6 +51,15 @@ class StreamingServerHelper(
         val outputStream: OutputStream,
         val writer: PrintWriter,
         val type: ClientType
+    )
+
+    data class DetectionEvent(
+        val event: String,
+        val time: String?,
+        val timestamp: Double?,
+        val confidence: Double?,
+        val confidencePercent: Int?,
+        val frequencyHz: Double?
     )
 
     private var serverSocket: ServerSocket? = null
@@ -249,6 +261,36 @@ class StreamingServerHelper(
                             }
                             requestBody = String(bodyBuffer, 0, totalRead)
                         }
+
+                        // Dedicated endpoint for server -> client detection events.
+                        if (path.contains("/adas3/detection-event", ignoreCase = true)) {
+                            if (method != "POST") {
+                                writer.print("HTTP/1.1 405 Method Not Allowed\r\n")
+                                writer.print("Connection: close\r\n")
+                                writer.print("Content-Type: application/json\r\n\r\n")
+                                writer.print("{\"status\":\"method_not_allowed\"}\r\n")
+                                writer.flush()
+                                socket.close()
+                                continue
+                            }
+
+                            val detectionEvent = parseDetectionEvent(requestBody)
+                            if (detectionEvent != null) {
+                                onDetectionEvent?.invoke(detectionEvent)
+                                writer.print("HTTP/1.1 200 OK\r\n")
+                                writer.print("Connection: close\r\n")
+                                writer.print("Content-Type: application/json\r\n\r\n")
+                                writer.print("{\"status\":\"received\"}\r\n")
+                            } else {
+                                writer.print("HTTP/1.1 400 Bad Request\r\n")
+                                writer.print("Connection: close\r\n")
+                                writer.print("Content-Type: application/json\r\n\r\n")
+                                writer.print("{\"status\":\"invalid_payload\"}\r\n")
+                            }
+                            writer.flush()
+                            socket.close()
+                            continue
+                        }
                         
                         if (username.isNotEmpty() && password.isNotEmpty()) {
                             val authHeader = headers.find { it.startsWith("Authorization: Basic ") }
@@ -435,5 +477,35 @@ class StreamingServerHelper(
             }
         }
         toRemove.forEach { removeClient(it) }
+    }
+
+    private fun parseDetectionEvent(requestBody: String): DetectionEvent? {
+        return try {
+            val json = JSONObject(requestBody)
+            val type = json.optString("type", "")
+            if (type.isNotEmpty() && !type.equals("adas3-server-detection", ignoreCase = true)) {
+                return null
+            }
+
+            val event = json.optString("event", "").lowercase()
+            if (event !in setOf("yolo", "tensorflow", "rf")) {
+                return null
+            }
+
+            val timestamp = if (json.has("timestamp")) json.optDouble("timestamp") else Double.NaN
+            val confidence = if (json.has("confidence")) json.optDouble("confidence") else Double.NaN
+            val frequencyHz = if (json.has("frequency_hz")) json.optDouble("frequency_hz") else Double.NaN
+
+            DetectionEvent(
+                event = event,
+                time = json.optString("time", "").ifBlank { null },
+                timestamp = timestamp.takeUnless { it.isNaN() },
+                confidence = confidence.takeUnless { it.isNaN() },
+                confidencePercent = if (json.has("confidence_percent")) json.optInt("confidence_percent") else null,
+                frequencyHz = frequencyHz.takeUnless { it.isNaN() }
+            )
+        } catch (_: JSONException) {
+            null
+        }
     }
 }
