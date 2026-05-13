@@ -31,9 +31,8 @@ class SettingsDialogFragment : DialogFragment() {
             ViewGroup.LayoutParams.MATCH_PARENT,
             (resources.displayMetrics.heightPixels * 0.9).toInt() // 90% de la altura
         )
-        // Fondo blanco semitransparente para mejor visibilidad
-        dialog.window?.setBackgroundDrawableResource(android.R.color.white)
-        dialog.window?.decorView?.setBackgroundColor(0xE6FFFFFF.toInt()) // Blanco con 90% opacidad (0xE6 = 230/255)
+        // Fondo oscuro para que el texto sea legible
+        dialog.window?.decorView?.setBackgroundColor(0xFF1C1C1F.toInt()) // Oscuro casi sólido
         return dialog
     }
 
@@ -42,20 +41,29 @@ class SettingsDialogFragment : DialogFragment() {
         container: ViewGroup?,
         savedInstanceState: Bundle?
     ): View? {
-        // Crear un FrameLayout como contenedor para el PreferenceFragment con fondo blanco semitransparente
+        // Contenedor con fondo oscuro para las preferencias
         val frameLayout = android.widget.FrameLayout(requireContext()).apply {
             id = View.generateViewId()
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
-            setBackgroundColor(0xE6FFFFFF.toInt()) // Blanco con 90% opacidad
+            setBackgroundColor(0xFF1C1C1F.toInt()) // Fondo oscuro
         }
         return frameLayout
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        // Force dark theme colors on the preference RecyclerView
+        view.findViewById<RecyclerView>(androidx.preference.R.id.recycler_view)?.let { rv ->
+            rv.setBackgroundColor(0xFF1C1C1F.toInt())
+            // Set text colors via theme overlay on the RecyclerView
+            rv.context.theme.applyStyle(R.style.SettingsDialogTheme, true)
+        }
+        // Also color the root view
+        view.setBackgroundColor(0xFF1C1C1F.toInt())
+
         if (childFragmentManager.findFragmentByTag("settings_fragment") == null) {
             childFragmentManager
                 .beginTransaction()
@@ -77,6 +85,12 @@ class SettingsDialogFragment : DialogFragment() {
 class SettingsFragment : PreferenceFragmentCompat() {
     companion object {
         private const val PICK_CERTIFICATE_FILE = 1
+    }
+
+    override fun onAttach(context: android.content.Context) {
+        // Apply dark theme before creating the preference UI
+        requireActivity().theme.applyStyle(R.style.SettingsDialogTheme, true)
+        super.onAttach(context)
     }
 
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
@@ -246,8 +260,10 @@ class SettingsFragment : PreferenceFragmentCompat() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        // Find the RecyclerView that displays preferences and set up GitHub logo button
+        // Force dark background and text colors on the preference list
+        view.setBackgroundColor(0xFF1C1C1F.toInt())
         view.findViewById<RecyclerView>(androidx.preference.R.id.recycler_view)?.let { recyclerView ->
+            recyclerView.setBackgroundColor(0xFF1C1C1F.toInt())
             setupGitHubButtonWithObserver(recyclerView)
         }
     }

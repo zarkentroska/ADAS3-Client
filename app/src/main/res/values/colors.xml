@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Primary palette -->
+    <color name="primary">#1E88E5</color>
+    <color name="primary_dark">#1565C0</color>
+    <color name="primary_light">#64B5F6</color>
+    <color name="accent">#FF6F00</color>
+
+    <!-- Status colors -->
+    <color name="status_online">#00E676</color>
+    <color name="status_offline">#FF5252</color>
+    <color name="status_warning">#FFD740</color>
+
+    <!-- Surface / background -->
+    <color name="bg_overlay">#CC1C1C1F</color>
+    <color name="bg_card">#DD1E1E24</color>
+    <color name="bg_card_pressed">#331E1E24</color>
+    <color name="bg_button">#442C2C34</color>
+    <color name="bg_button_active">#551E88E5</color>
+    <color name="bg_dpad">#552C2C34</color>
+
+    <!-- Text -->
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#B0BEC5</color>
+    <color name="text_accent">#64B5F6</color>
+
+    <!-- EP32 D-pad -->
+    <color name="dpad_bg">#66303038</color>
+    <color name="dpad_pressed">#881E88E5</color>
+    <color name="dpad_center">#44404048</color>
+</resources>

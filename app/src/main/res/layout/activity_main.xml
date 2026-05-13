@@ -1,173 +1,354 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="#000000">
 
+    <!-- Camera Preview -->
     <androidx.camera.view.PreviewView
         android:id="@+id/viewFinder"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <TextView
-        android:id="@+id/serverConnectionStatusText"
-        android:layout_width="wrap_content"
+    <!-- ===== TOP BAR ===== -->
+
+    <!-- Server Connection Status -->
+    <LinearLayout
+        android:id="@+id/serverStatusCard"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_marginStart="16dp"
-        android:layout_marginTop="28dp"
-        android:background="#80000000"
-        android:padding="6dp"
-        android:text="@string/server_connection_off"
-        android:textColor="#FF4444"
-        android:textSize="12sp"
+        android:layout_marginTop="20dp"
+        android:layout_marginEnd="8dp"
+        android:background="@drawable/card_background"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="8dp"
+        app:layout_constraintEnd_toStartOf="@id/topRightButtonBar"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        app:layout_constraintTop_toTopOf="parent">
 
+        <View
+            android:id="@+id/connectionDot"
+            android:layout_width="10dp"
+            android:layout_height="10dp"
+            android:background="@drawable/status_indicator_offline" />
+
+        <TextView
+            android:id="@+id/serverConnectionStatusText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:text="@string/server_connection_off"
+            android:textColor="@color/status_offline"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- Action Buttons Bar (top-right) -->
     <LinearLayout
         android:id="@+id/topRightButtonBar"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:layout_margin="16dp"
+        android:layout_marginTop="16dp"
+        android:layout_marginEnd="16dp"
         android:gravity="end"
-        app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintEnd_toEndOf="parent">
+        android:orientation="horizontal"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
         <ImageButton
             android:id="@+id/settingsButton"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:background="@android:color/transparent"
-            android:src="@android:drawable/ic_menu_preferences"
-            android:contentDescription="Settings" />
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginEnd="6dp"
+            android:background="@drawable/action_button_selector"
+            android:contentDescription="Settings"
+            android:padding="10dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_settings" />
+
         <ImageButton
             android:id="@+id/switchCameraButton"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:background="@android:color/transparent"
-            android:src="@android:drawable/ic_menu_camera"
-            android:contentDescription="Switch Camera" />
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginEnd="6dp"
+            android:background="@drawable/action_button_selector"
+            android:contentDescription="Switch Camera"
+            android:padding="10dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_flip_camera" />
+
         <ImageButton
             android:id="@+id/hidePreviewButton"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:background="@android:color/transparent"
-            android:src="@android:drawable/ic_menu_view"
-            android:contentDescription="Toggle Preview" />
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginEnd="6dp"
+            android:background="@drawable/action_button_selector"
+            android:contentDescription="Toggle Preview"
+            android:padding="10dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_visibility" />
+
         <ImageButton
             android:id="@+id/audioToggleButton"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:background="@android:color/transparent"
-            android:src="@android:drawable/ic_lock_silent_mode"
-            android:contentDescription="Toggle Audio" />
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:background="@drawable/action_button_selector"
+            android:contentDescription="Toggle Audio"
+            android:padding="10dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_audio" />
     </LinearLayout>
 
+    <!-- ===== BOTTOM SHEET ===== -->
+
+    <!-- Bottom container anchored to bottom -->
     <LinearLayout
-        android:id="@+id/detectionSessionContainer"
-        android:layout_width="wrap_content"
+        android:id="@+id/bottomContainer"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_marginStart="16dp"
-        android:layout_marginBottom="8dp"
-        android:background="#80000000"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:padding="8dp"
-        app:layout_constraintBottom_toTopOf="@id/ipAddressContainer"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="24dp"
+        android:background="@drawable/card_background"
+        android:orientation="vertical"
+        android:paddingHorizontal="16dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="20dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent">
 
-        <TextView
-            android:id="@+id/detectionSessionText"
-            android:layout_width="wrap_content"
+        <!-- Detection Session Row -->
+        <LinearLayout
+            android:id="@+id/detectionSessionContainer"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="8dp"
-            android:text="@string/detection_session_summary"
-            android:textColor="#FFFFFF"
-            android:textSize="12sp" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingBottom="12dp">
+
+            <TextView
+                android:id="@+id/detectionSessionText"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/detection_session_summary"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+
+            <ImageButton
+                android:id="@+id/detectionDetailsButton"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:background="@drawable/action_button_selector"
+                android:contentDescription="@string/detection_details_button_description"
+                android:padding="8dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_info" />
+        </LinearLayout>
+
+        <!-- Divider -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginBottom="12dp"
+            android:background="#33404048" />
+
+        <!-- EP32 Bluetooth Row -->
+        <LinearLayout
+            android:id="@+id/ep32BluetoothContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingBottom="12dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/ep32_switch_title"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp" />
+
+            <Switch
+                android:id="@+id/ep32BluetoothSwitch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+
+            <TextView
+                android:id="@+id/ep32BluetoothStatusText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:text="@string/ep32_status_off"
+                android:textColor="@color/status_offline"
+                android:textSize="12sp"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <!-- Divider -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginBottom="12dp"
+            android:background="#33404048" />
+
+        <!-- IP Address Section -->
+        <LinearLayout
+            android:id="@+id/ipAddressContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <!-- IP Spinner Row -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <Spinner
+                    android:id="@+id/ipAddressSpinner"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/spinner_background"
+                    android:popupBackground="#2A2A30"
+                    android:textSize="14sp" />
+
+                <ImageButton
+                    android:id="@+id/refreshIpButton"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/action_button_selector"
+                    android:contentDescription="Actualizar IPs"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_refresh" />
+            </LinearLayout>
+
+            <!-- Tailscale Toggle Row -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Tailscale"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp" />
+
+                <Switch
+                    android:id="@+id/tailscaleSwitch"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:checked="false" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- ===== EP32 D-PAD CONTROL PANEL ===== -->
+    <FrameLayout
+        android:id="@+id/ep32ControlPanel"
+        android:layout_width="160dp"
+        android:layout_height="160dp"
+        android:layout_marginEnd="16dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@id/bottomContainer"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <!-- D-pad background glow -->
+        <View
+            android:layout_width="150dp"
+            android:layout_height="150dp"
+            android:layout_gravity="center"
+            android:background="@drawable/card_background" />
 
         <ImageButton
-            android:id="@+id/detectionDetailsButton"
-            android:layout_width="32dp"
-            android:layout_height="32dp"
-            android:background="@android:color/transparent"
-            android:contentDescription="@string/detection_details_button_description"
-            android:padding="4dp"
-            android:src="@android:drawable/ic_menu_info_details" />
-    </LinearLayout>
+            android:id="@+id/dpadUp"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="top|center_horizontal"
+            android:layout_marginTop="6dp"
+            android:background="@drawable/dpad_button_bg"
+            android:contentDescription="@string/ep32_button_up"
+            android:padding="10dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_arrow_up" />
 
-    <LinearLayout
-        android:id="@+id/ipAddressContainer"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:layout_marginBottom="16dp"
-        android:layout_marginStart="16dp"
-        android:background="#80000000"
-        android:padding="8dp"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintStart_toStartOf="parent">
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
-            <Spinner
-                android:id="@+id/ipAddressSpinner"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:textSize="14sp"
-                android:minWidth="200dp" />
-            <ImageButton
-                android:id="@+id/refreshIpButton"
-                android:layout_width="32dp"
-                android:layout_height="32dp"
-                android:layout_marginStart="8dp"
-                android:background="@android:color/transparent"
-                android:src="@android:drawable/ic_menu_rotate"
-                android:contentDescription="Actualizar IPs"
-                android:padding="4dp" />
-        </LinearLayout>
-        <TextView
-            android:id="@+id/ipAddressText"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textSize="12sp"
-            android:textColor="#CCCCCC"
-            android:layout_marginTop="4dp"
-            android:visibility="gone" />
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginTop="8dp"
-            android:gravity="center_vertical">
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Tailscale"
-                android:textColor="#FFFFFF"
-                android:textSize="12sp"
-                android:layout_marginEnd="8dp" />
-            <Switch
-                android:id="@+id/tailscaleSwitch"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:checked="false" />
-        </LinearLayout>
-    </LinearLayout>
+        <ImageButton
+            android:id="@+id/dpadDown"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="6dp"
+            android:background="@drawable/dpad_button_bg"
+            android:contentDescription="@string/ep32_button_down"
+            android:padding="10dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_arrow_down" />
 
+        <ImageButton
+            android:id="@+id/dpadLeft"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="center_vertical|start"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/dpad_button_bg"
+            android:contentDescription="@string/ep32_button_left"
+            android:padding="10dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_arrow_left" />
+
+        <ImageButton
+            android:id="@+id/dpadRight"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_gravity="center_vertical|end"
+            android:layout_marginEnd="6dp"
+            android:background="@drawable/dpad_button_bg"
+            android:contentDescription="@string/ep32_button_right"
+            android:padding="10dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_arrow_right" />
+
+        <!-- Center dot -->
+        <View
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_gravity="center"
+            android:background="@drawable/status_indicator_online"
+            android:backgroundTint="@color/dpad_center" />
+    </FrameLayout>
+
+    <!-- TinySA Status (bottom-right corner) -->
     <TextView
         android:id="@+id/tinysaStatusText"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="16dp"
         android:layout_marginEnd="16dp"
-        android:textSize="12sp"
-        android:textColor="#00FF00"
-        android:background="#80000000"
-        android:padding="6dp"
-        android:visibility="gone"
+        android:layout_marginBottom="8dp"
+        android:background="@drawable/card_background"
+        android:paddingHorizontal="12dp"
+        android:paddingVertical="6dp"
         android:text="TinySA conectado"
-        app:layout_constraintBottom_toBottomOf="parent"
+        android:textColor="@color/status_online"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@id/bottomContainer"
         app:layout_constraintEnd_toEndOf="parent" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

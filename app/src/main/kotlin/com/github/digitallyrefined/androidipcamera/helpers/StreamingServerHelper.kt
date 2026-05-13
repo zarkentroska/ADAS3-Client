@@ -36,14 +36,16 @@ class StreamingServerHelper(
     private val onClientDisconnected: () -> Unit = {},
     private val onTinySACommand: ((String) -> Unit)? = null,
     private val onDetectionEvent: ((DetectionEvent) -> Unit)? = null,
+    private val onEp32Command: ((Ep32CommandRequest) -> Boolean)? = null,
     private val getTinySAStatus: (() -> Boolean)? = null,
+    private val getMicArrayStatus: (() -> String?)? = null,
     private var bindIpAddress: String? = null  // null = todas las interfaces (0.0.0.0)
 ) {
     // Audio configuration (updated from preferences)
     var audioSampleRate: Int = 44100
     var audioChannels: Int = 1  // 1 = mono, 2 = stereo
     enum class ClientType {
-        VIDEO, AUDIO, TINYSA_DATA, TINYSA_COMMAND
+        VIDEO, AUDIO, TINYSA_DATA, TINYSA_COMMAND, MIC_ARRAY_DATA
     }
     
     data class Client(
@@ -62,6 +64,12 @@ class StreamingServerHelper(
         val frequencyHz: Double?
     )
 
+    data class Ep32CommandRequest(
+        val command: String?,
+        val sequence: List<String>,
+        val delayMs: Long
+    )
+
     private var serverSocket: ServerSocket? = null
     private var serverJob: kotlinx.coroutines.Job? = null
     @Volatile private var isServerRunning = false
@@ -69,12 +77,14 @@ class StreamingServerHelper(
     private val audioClients = CopyOnWriteArrayList<Client>()
     private val tinysaDataClients = CopyOnWriteArrayList<Client>()
     private val tinysaCommandClients = CopyOnWriteArrayList<Client>()
+    private val micArrayDataClients = CopyOnWriteArrayList<Client>()
 
-    fun getClients(): List<Client> = (videoClients + audioClients + tinysaDataClients + tinysaCommandClients).toList()
+    fun getClients(): List<Client> = (videoClients + audioClients + tinysaDataClients + tinysaCommandClients + micArrayDataClients).toList()
     fun getVideoClients(): List<Client> = videoClients.toList()
     fun getAudioClients(): List<Client> = audioClients.toList()
     fun getTinySADataClients(): List<Client> = tinysaDataClients.toList()
     fun getTinySACommandClients(): List<Client> = tinysaCommandClients.toList()
+    fun getMicArrayDataClients(): List<Client> = micArrayDataClients.toList()
     
     /**
      * Cierra todas las conexiones activas del tipo TinySA data.
@@ -109,7 +119,7 @@ class StreamingServerHelper(
     }
     
     private fun closeAllClients() {
-        (videoClients + audioClients + tinysaDataClients + tinysaCommandClients).forEach { client ->
+        (videoClients + audioClients + tinysaDataClients + tinysaCommandClients + micArrayDataClients).forEach { client ->
             try {
                 client.socket.close()
             } catch (e: Exception) {
@@ -120,6 +130,7 @@ class StreamingServerHelper(
         audioClients.clear()
         tinysaDataClients.clear()
         tinysaCommandClients.clear()
+        micArrayDataClients.clear()
     }
     
     fun startStreamingServer() {
@@ -205,11 +216,27 @@ class StreamingServerHelper(
                             socket.close()
                             continue
                         }
-                        
+
+                        // Mic-array snapshot status (last heartbeat + last acoustic event).
+                        // The server can poll this if it just wants the latest payload
+                        // instead of opening the streaming endpoint.
+                        if (path.contains("/adas3/mic-array/status", ignoreCase = true)) {
+                            val statusJson = getMicArrayStatus?.invoke() ?: "{\"connected\":false}"
+                            writer.print("HTTP/1.1 200 OK\r\n")
+                            writer.print("Connection: close\r\n")
+                            writer.print("Content-Type: application/json\r\n")
+                            writer.print("Access-Control-Allow-Origin: *\r\n\r\n")
+                            writer.print("$statusJson\r\n")
+                            writer.flush()
+                            socket.close()
+                            continue
+                        }
+
                         // Determine client type based on path
                         val clientType = when {
                             path.contains("/tinysa/data", ignoreCase = true) -> ClientType.TINYSA_DATA
                             path.contains("/tinysa/command", ignoreCase = true) -> ClientType.TINYSA_COMMAND
+                            path.contains("/adas3/mic-array/data", ignoreCase = true) -> ClientType.MIC_ARRAY_DATA
                             path.contains("/audio", ignoreCase = true) -> ClientType.AUDIO
                             else -> ClientType.VIDEO
                         }
@@ -225,6 +252,7 @@ class StreamingServerHelper(
                             ClientType.AUDIO -> audioClients
                             ClientType.TINYSA_DATA -> tinysaDataClients
                             ClientType.TINYSA_COMMAND -> tinysaCommandClients
+                            ClientType.MIC_ARRAY_DATA -> micArrayDataClients
                         }
                         if (currentClients.size >= maxClients) {
                             writer.print("HTTP/1.1 503 Service Unavailable\r\n\r\n")
@@ -291,6 +319,46 @@ class StreamingServerHelper(
                             socket.close()
                             continue
                         }
+
+                        // Endpoint for server -> client EP32 remote control commands.
+                        if (path.contains("/adas3/ep32-command", ignoreCase = true)) {
+                            if (method != "POST") {
+                                writer.print("HTTP/1.1 405 Method Not Allowed\r\n")
+                                writer.print("Connection: close\r\n")
+                                writer.print("Content-Type: application/json\r\n\r\n")
+                                writer.print("{\"status\":\"method_not_allowed\"}\r\n")
+                                writer.flush()
+                                socket.close()
+                                continue
+                            }
+
+                            val commandRequest = parseEp32CommandRequest(requestBody)
+                            if (commandRequest == null) {
+                                writer.print("HTTP/1.1 400 Bad Request\r\n")
+                                writer.print("Connection: close\r\n")
+                                writer.print("Content-Type: application/json\r\n\r\n")
+                                writer.print("{\"status\":\"invalid_payload\"}\r\n")
+                                writer.flush()
+                                socket.close()
+                                continue
+                            }
+
+                            val accepted = onEp32Command?.invoke(commandRequest) == true
+                            if (accepted) {
+                                writer.print("HTTP/1.1 200 OK\r\n")
+                                writer.print("Connection: close\r\n")
+                                writer.print("Content-Type: application/json\r\n\r\n")
+                                writer.print("{\"status\":\"accepted\"}\r\n")
+                            } else {
+                                writer.print("HTTP/1.1 409 Conflict\r\n")
+                                writer.print("Connection: close\r\n")
+                                writer.print("Content-Type: application/json\r\n\r\n")
+                                writer.print("{\"status\":\"not_connected\"}\r\n")
+                            }
+                            writer.flush()
+                            socket.close()
+                            continue
+                        }
                         
                         if (username.isNotEmpty() && password.isNotEmpty()) {
                             val authHeader = headers.find { it.startsWith("Authorization: Basic ") }
@@ -339,7 +407,7 @@ class StreamingServerHelper(
                                     onLog("TinySA command received: $requestBody")
                                     onTinySACommand?.invoke(requestBody)
                                 }
-                                
+
                                 // Send response and close connection (one-shot command)
                                 writer.print("HTTP/1.1 200 OK\r\n")
                                 writer.print("Connection: close\r\n")
@@ -348,6 +416,27 @@ class StreamingServerHelper(
                                 writer.flush()
                                 socket.close()
                                 onLog("TinySA command processed and connection closed")
+                            }
+                            ClientType.MIC_ARRAY_DATA -> {
+                                // Streaming JSONL channel: every line forwarded is one
+                                // payload received from the ESP32 mic-array over BT
+                                // (heartbeat or acoustic). The server consumes this
+                                // and is expected to enqueue an internal
+                                // `acoustic_array` event to avoid duplicate alerts.
+                                writer.print("HTTP/1.1 200 OK\r\n")
+                                writer.print("Connection: keep-alive\r\n")
+                                writer.print("Cache-Control: no-cache, no-store, must-revalidate\r\n")
+                                writer.print("Content-Type: application/x-ndjson\r\n\r\n")
+                                writer.flush()
+                                try {
+                                    socket.keepAlive = true
+                                    socket.soTimeout = 0
+                                    socket.tcpNoDelay = true
+                                } catch (_: Exception) {
+                                    // best-effort
+                                }
+                                micArrayDataClients.add(Client(socket, outputStream, writer, clientType))
+                                onLog("Mic-array data client connected")
                             }
                             else -> {
                                 // Use HTTP/1.1 for proper keep-alive support
@@ -392,7 +481,7 @@ class StreamingServerHelper(
     }
 
     fun closeClientConnection() {
-        (videoClients + audioClients + tinysaDataClients + tinysaCommandClients).forEach { client ->
+        (videoClients + audioClients + tinysaDataClients + tinysaCommandClients + micArrayDataClients).forEach { client ->
             try {
                 client.socket.close()
             } catch (e: IOException) {
@@ -403,6 +492,7 @@ class StreamingServerHelper(
         audioClients.clear()
         tinysaDataClients.clear()
         tinysaCommandClients.clear()
+        micArrayDataClients.clear()
         onClientDisconnected()
     }
 
@@ -419,6 +509,7 @@ class StreamingServerHelper(
             ClientType.AUDIO -> audioClients.remove(client)
             ClientType.TINYSA_DATA -> tinysaDataClients.remove(client)
             ClientType.TINYSA_COMMAND -> tinysaCommandClients.remove(client)
+            ClientType.MIC_ARRAY_DATA -> micArrayDataClients.remove(client)
         }
         onClientDisconnected()
     }
@@ -429,6 +520,7 @@ class StreamingServerHelper(
             ClientType.AUDIO -> audioClients.toList()
             ClientType.TINYSA_DATA -> tinysaDataClients.toList()
             ClientType.TINYSA_COMMAND -> tinysaCommandClients.toList()
+            ClientType.MIC_ARRAY_DATA -> micArrayDataClients.toList()
         }
         clients.forEach { removeClient(it) }
     }
@@ -465,6 +557,28 @@ class StreamingServerHelper(
         toRemove.forEach { removeClient(it) }
     }
     
+    /**
+     * Forwards one JSONL payload from the ESP32 mic-array to every connected
+     * mic-array data client (the ADAS3 server). The line is already a complete
+     * JSON object (heartbeat / acoustic); we just append the newline delimiter.
+     */
+    fun sendMicArrayPayload(jsonLine: String) {
+        if (micArrayDataClients.isEmpty()) return
+        val line = if (jsonLine.endsWith("\n")) jsonLine else "$jsonLine\n"
+        val toRemove = mutableListOf<Client>()
+        micArrayDataClients.forEach { client ->
+            try {
+                client.writer.print(line)
+                client.writer.flush()
+                client.outputStream.flush()
+            } catch (e: IOException) {
+                toRemove.add(client)
+                onLog("Mic-array data client write failed: ${e.message}")
+            }
+        }
+        toRemove.forEach { removeClient(it) }
+    }
+
     fun sendAudioData(audioData: ByteArray) {
         val toRemove = mutableListOf<Client>()
         audioClients.forEach { client ->
@@ -504,6 +618,35 @@ class StreamingServerHelper(
                 confidencePercent = if (json.has("confidence_percent")) json.optInt("confidence_percent") else null,
                 frequencyHz = frequencyHz.takeUnless { it.isNaN() }
             )
+        } catch (_: JSONException) {
+            null
+        }
+    }
+
+    private fun parseEp32CommandRequest(requestBody: String): Ep32CommandRequest? {
+        return try {
+            val json = JSONObject(requestBody)
+            val type = json.optString("type", "")
+            if (type.isNotEmpty() && !type.equals("adas3-ep32-command", ignoreCase = true)) {
+                return null
+            }
+
+            val command = json.optString("command", "").ifBlank { null }?.uppercase()
+            val sequenceJson = json.optJSONArray("sequence")
+            val sequence = mutableListOf<String>()
+            if (sequenceJson != null) {
+                for (i in 0 until sequenceJson.length()) {
+                    val item = sequenceJson.optString(i, "").uppercase()
+                    if (item.isNotBlank()) sequence.add(item)
+                }
+            }
+
+            if (command == null && sequence.isEmpty()) {
+                return null
+            }
+
+            val delayMs = json.optLong("delay_ms", 180L).coerceIn(50L, 2000L)
+            Ep32CommandRequest(command, sequence, delayMs)
         } catch (_: JSONException) {
             null
         }

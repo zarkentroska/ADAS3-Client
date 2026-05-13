@@ -66,6 +66,27 @@
     <string name="detection_type_rf">RF</string>
     <string name="detection_event_confidence">conf.</string>
     <string name="detection_event_frequency">freq.</string>
+    <string name="ep32_switch_title">Activar EP32-Bluetooth</string>
+    <string name="ep32_status_off">EP32: desconectado</string>
+    <string name="ep32_status_scanning">EP32: escaneando...</string>
+    <string name="ep32_status_connecting">EP32: conectando...</string>
+    <string name="ep32_status_connected">EP32: conectado</string>
+    <string name="ep32_status_error">EP32: error de conexión</string>
+    <string name="ep32_controls_title">Control EP32</string>
+    <string name="ep32_button_up">Arriba</string>
+    <string name="ep32_button_down">Abajo</string>
+    <string name="ep32_button_left">Izquierda</string>
+    <string name="ep32_button_right">Derecha</string>
+    <string name="ep32_button_a">A</string>
+    <string name="ep32_button_b">B</string>
+    <string name="ep32_button_menu">Menú</string>
+    <string name="ep32_button_auto">Auto</string>
+    <string name="ep32_button_fix_a">Fijar A</string>
+    <string name="ep32_button_fix_b">Fijar B</string>
+    <string name="ep32_button_auto_a">Auto A</string>
+    <string name="ep32_button_auto_b">Auto B</string>
+    <string name="toast_ep32_permission_required">Permisos Bluetooth requeridos para EP32</string>
+    <string name="toast_ep32_enable_bluetooth">Activa Bluetooth para conectar con EP32</string>
     
     <!-- IP Labels -->
     <string name="ip_label_tailscale">Tailscale</string>

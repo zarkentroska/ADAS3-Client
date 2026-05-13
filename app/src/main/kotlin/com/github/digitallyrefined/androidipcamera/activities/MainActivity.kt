@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.bluetooth.BluetoothAdapter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.hardware.camera2.CameraCharacteristics
@@ -26,9 +27,9 @@ import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
-import android.widget.Button
 import android.widget.TextView
 import android.widget.ImageButton
+import android.widget.Switch
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -54,6 +55,7 @@ import java.util.Locale
 import com.github.digitallyrefined.androidipcamera.databinding.ActivityMainBinding
 import com.github.digitallyrefined.androidipcamera.helpers.AudioCaptureHelper
 import com.github.digitallyrefined.androidipcamera.helpers.CameraResolutionHelper
+import com.github.digitallyrefined.androidipcamera.helpers.Ep32BluetoothHelper
 import com.github.digitallyrefined.androidipcamera.helpers.LanDiscoveryBeaconHelper
 import com.github.digitallyrefined.androidipcamera.helpers.StreamingServerHelper
 import com.github.digitallyrefined.androidipcamera.helpers.TinySACommandParser
@@ -99,8 +101,13 @@ class MainActivity : AppCompatActivity() {
     private var currentServerBindIp: String? = null
     private var shouldRestartServerOnResume = false
     private var lanDiscoveryBeaconHelper: LanDiscoveryBeaconHelper? = null
+    private var ep32BluetoothHelper: Ep32BluetoothHelper? = null
     private var serverConnectionStatusText: TextView? = null
     private var detectionSessionText: TextView? = null
+    private var ep32BluetoothSwitch: Switch? = null
+    private var ep32BluetoothStatusText: TextView? = null
+    private var ep32ControlPanel: View? = null
+    private var isEp32Enabled = false
     private var yoloDetections = 0
     private var tensorflowDetections = 0
     private var rfDetections = 0
@@ -277,8 +284,14 @@ class MainActivity : AppCompatActivity() {
             onDetectionEvent = { detectionEvent ->
                 handleDetectionEvent(detectionEvent)
             },
+            onEp32Command = { commandRequest ->
+                handleEp32CommandRequest(commandRequest)
+            },
             getTinySAStatus = {
                 isTinySAConnected
+            },
+            getMicArrayStatus = {
+                buildMicArrayStatusJson()
             },
             bindIpAddress = bindIp
         )
@@ -339,17 +352,17 @@ class MainActivity : AppCompatActivity() {
 
         // Find the Spinner and TextView
         val ipAddressSpinner = findViewById<android.widget.Spinner>(R.id.ipAddressSpinner)
-        val ipAddressText = findViewById<TextView>(R.id.ipAddressText)
         serverConnectionStatusText = findViewById(R.id.serverConnectionStatusText)
         detectionSessionText = findViewById(R.id.detectionSessionText)
+        ep32BluetoothSwitch = findViewById(R.id.ep32BluetoothSwitch)
+        ep32BluetoothStatusText = findViewById(R.id.ep32BluetoothStatusText)
+        ep32ControlPanel = findViewById(R.id.ep32ControlPanel)
         findViewById<ImageButton>(R.id.detectionDetailsButton)?.setOnClickListener {
             showDetectionDetailsDialog()
         }
         updateServerConnectionIndicator(hasServerConnection)
         updateDetectionSessionSummary()
-        
-        // Hide the TextView to avoid duplication
-        ipAddressText.visibility = View.GONE
+        setupEp32Controls()
 
         // Get and display all IP addresses
         val ipAddresses = getAllLocalIpAddresses()
@@ -361,7 +374,7 @@ class MainActivity : AppCompatActivity() {
         // Configure IP address spinner (only IPs, no "Todas") - show IP:port
         val spinnerItems = buildIpSpinnerItems(ipAddresses, streamPortForSpinner)
         
-        // Create adapter with white text color
+        // Create adapter with dark theme colors
         val adapter = object : android.widget.ArrayAdapter<String>(
             this,
             android.R.layout.simple_spinner_item,
@@ -370,14 +383,17 @@ class MainActivity : AppCompatActivity() {
             override fun getView(position: Int, convertView: android.view.View?, parent: android.view.ViewGroup): android.view.View {
                 val view = super.getView(position, convertView, parent)
                 val textView = view.findViewById<TextView>(android.R.id.text1)
-                textView.setTextColor(android.graphics.Color.WHITE)
+                textView.setTextColor(Color.parseColor("#FFFFFF"))
+                textView.textSize = 14f
                 return view
             }
             
             override fun getDropDownView(position: Int, convertView: android.view.View?, parent: android.view.ViewGroup): android.view.View {
                 val view = super.getDropDownView(position, convertView, parent)
+                view.setBackgroundColor(Color.parseColor("#2A2A30"))
                 val textView = view.findViewById<TextView>(android.R.id.text1)
-                textView.setTextColor(android.graphics.Color.BLACK)
+                textView.setTextColor(Color.parseColor("#E0E0E0"))
+                textView.textSize = 14f
                 return view
             }
         }
@@ -686,6 +702,17 @@ class MainActivity : AppCompatActivity() {
             } else {
                 Toast.makeText(this, getString(R.string.toast_audio_permission_required), Toast.LENGTH_SHORT).show()
             }
+        } else if (requestCode == REQUEST_CODE_EP32_PERMISSIONS) {
+            val granted = grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }
+            if (granted) {
+                if (ep32BluetoothSwitch?.isChecked == true) {
+                    startEp32AutoConnectIfAllowed()
+                }
+            } else {
+                Toast.makeText(this, getString(R.string.toast_ep32_permission_required), Toast.LENGTH_SHORT).show()
+                ep32BluetoothSwitch?.isChecked = false
+                updateEp32UiState(Ep32BluetoothHelper.State.OFF)
+            }
         }
     }
 
@@ -914,7 +941,7 @@ class MainActivity : AppCompatActivity() {
         // Build new spinner items
         val spinnerItems = buildIpSpinnerItems(ipAddresses, streamPortForSpinner)
         
-        // Create new adapter
+        // Create new adapter with dark theme colors
         val adapter = object : android.widget.ArrayAdapter<String>(
             this,
             android.R.layout.simple_spinner_item,
@@ -923,14 +950,17 @@ class MainActivity : AppCompatActivity() {
             override fun getView(position: Int, convertView: android.view.View?, parent: android.view.ViewGroup): android.view.View {
                 val view = super.getView(position, convertView, parent)
                 val textView = view.findViewById<TextView>(android.R.id.text1)
-                textView.setTextColor(android.graphics.Color.WHITE)
+                textView.setTextColor(Color.parseColor("#FFFFFF"))
+                textView.textSize = 14f
                 return view
             }
             
             override fun getDropDownView(position: Int, convertView: android.view.View?, parent: android.view.ViewGroup): android.view.View {
                 val view = super.getDropDownView(position, convertView, parent)
+                view.setBackgroundColor(Color.parseColor("#2A2A30"))
                 val textView = view.findViewById<TextView>(android.R.id.text1)
-                textView.setTextColor(android.graphics.Color.BLACK)
+                textView.setTextColor(Color.parseColor("#E0E0E0"))
+                textView.textSize = 14f
                 return view
             }
         }
@@ -1102,6 +1132,202 @@ class MainActivity : AppCompatActivity() {
             .setMessage("$session\n\n$recentHeader\n$recent")
             .setPositiveButton(android.R.string.ok, null)
             .show()
+    }
+
+    private fun setupEp32Controls() {
+        val prefs = PreferenceManager.getDefaultSharedPreferences(this)
+        ep32BluetoothHelper = Ep32BluetoothHelper(
+            this,
+            prefs = prefs,
+            onStateChanged = { state, detail -> handleEp32State(state, detail) },
+            onLog = { message -> Log.d(TAG, "[EP32] $message") },
+            onHeartbeat = { hb -> forwardMicArrayHeartbeat(hb) },
+            onAcoustic = { ac -> forwardMicArrayAcoustic(ac) },
+            onUnknownPayload = { raw ->
+                Log.d(TAG, "[EP32] unknown JSONL payload: ${raw.take(160)}")
+            }
+        )
+        isEp32Enabled = prefs.getBoolean(PREF_EP32_ENABLED, false)
+
+        ep32BluetoothSwitch?.setOnCheckedChangeListener(null)
+        ep32BluetoothSwitch?.isChecked = isEp32Enabled
+        ep32BluetoothSwitch?.setOnCheckedChangeListener { _, isChecked ->
+            isEp32Enabled = isChecked
+            prefs.edit().putBoolean(PREF_EP32_ENABLED, isChecked).apply()
+            if (isChecked) {
+                startEp32AutoConnectIfAllowed()
+            } else {
+                ep32BluetoothHelper?.stop()
+                updateEp32UiState(Ep32BluetoothHelper.State.OFF)
+            }
+        }
+
+        setupEp32ButtonBindings()
+        updateEp32UiState(Ep32BluetoothHelper.State.OFF)
+
+        if (isEp32Enabled) {
+            startEp32AutoConnectIfAllowed()
+        }
+    }
+
+    private fun setupEp32ButtonBindings() {
+        findViewById<ImageButton>(R.id.dpadUp)?.setOnClickListener { sendEp32Command("UP") }
+        findViewById<ImageButton>(R.id.dpadDown)?.setOnClickListener { sendEp32Command("DOWN") }
+        findViewById<ImageButton>(R.id.dpadLeft)?.setOnClickListener { sendEp32Command("LEFT") }
+        findViewById<ImageButton>(R.id.dpadRight)?.setOnClickListener { sendEp32Command("RIGHT") }
+    }
+
+    private fun sendEp32Command(command: String): Boolean {
+        return ep32BluetoothHelper?.sendCommand(command) == true
+    }
+
+    private fun handleEp32CommandRequest(commandRequest: StreamingServerHelper.Ep32CommandRequest): Boolean {
+        if (!isEp32Enabled || ep32BluetoothHelper?.isConnected() != true) {
+            return false
+        }
+        val command = commandRequest.command ?: commandRequest.sequence.firstOrNull() ?: return false
+        return sendEp32Command(command)
+    }
+
+    // Mic-array bridging: payloads come in via Bluetooth SPP from the ESP32
+    // (which does the I2S beamforming/GCC-PHAT locally) and are forwarded as-is
+    // to the ADAS3 server through the streaming HTTP server already exposed by
+    // this client. Phone-mic audio path is unaffected.
+    private fun forwardMicArrayHeartbeat(hb: Ep32BluetoothHelper.Heartbeat) {
+        val firmware = hb.firmware?.let { org.json.JSONObject.quote(it) } ?: "null"
+        val payload = "{\"type\":\"heartbeat\",\"mic_count\":${hb.micCount},\"firmware\":$firmware}"
+        streamingServerHelper?.sendMicArrayPayload(payload)
+    }
+
+    private fun forwardMicArrayAcoustic(ac: Ep32BluetoothHelper.Acoustic) {
+        val sb = StringBuilder()
+        sb.append("{\"type\":\"acoustic\",\"detected\":").append(ac.detected)
+        ac.doaDeg?.let { sb.append(",\"doa_deg\":").append(it) }
+        ac.energy?.let { sb.append(",\"energy\":").append(it) }
+        ac.confidence?.let { sb.append(",\"confidence\":").append(it) }
+        ac.micCount?.let { sb.append(",\"mic_count\":").append(it) }
+        sb.append("}")
+        streamingServerHelper?.sendMicArrayPayload(sb.toString())
+    }
+
+    private fun buildMicArrayStatusJson(): String {
+        val helper = ep32BluetoothHelper
+        val connected = helper?.isConnected() == true
+        val hb = helper?.getLastHeartbeat()
+        val ac = helper?.getLastAcoustic()
+        val sb = StringBuilder()
+        sb.append("{\"connected\":").append(connected)
+        if (hb != null) {
+            sb.append(",\"heartbeat\":{\"mic_count\":").append(hb.micCount)
+            val fw = hb.firmware?.let { org.json.JSONObject.quote(it) } ?: "null"
+            sb.append(",\"firmware\":").append(fw).append("}")
+        }
+        if (ac != null) {
+            sb.append(",\"last_acoustic\":{\"detected\":").append(ac.detected)
+            ac.doaDeg?.let { sb.append(",\"doa_deg\":").append(it) }
+            ac.energy?.let { sb.append(",\"energy\":").append(it) }
+            ac.confidence?.let { sb.append(",\"confidence\":").append(it) }
+            ac.micCount?.let { sb.append(",\"mic_count\":").append(it) }
+            sb.append("}")
+        }
+        sb.append("}")
+        return sb.toString()
+    }
+
+    private fun startEp32AutoConnectIfAllowed() {
+        if (!ensureEp32Permissions()) {
+            ep32BluetoothSwitch?.setOnCheckedChangeListener(null)
+            ep32BluetoothSwitch?.isChecked = false
+            ep32BluetoothSwitch?.setOnCheckedChangeListener { _, checked ->
+                isEp32Enabled = checked
+                PreferenceManager.getDefaultSharedPreferences(this)
+                    .edit()
+                    .putBoolean(PREF_EP32_ENABLED, checked)
+                    .apply()
+                if (checked) startEp32AutoConnectIfAllowed() else {
+                    ep32BluetoothHelper?.stop()
+                    updateEp32UiState(Ep32BluetoothHelper.State.OFF)
+                }
+            }
+            isEp32Enabled = false
+            PreferenceManager.getDefaultSharedPreferences(this).edit().putBoolean(PREF_EP32_ENABLED, false).apply()
+            return
+        }
+
+        val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
+        if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled) {
+            Toast.makeText(this, getString(R.string.toast_ep32_enable_bluetooth), Toast.LENGTH_SHORT).show()
+            updateEp32UiState(Ep32BluetoothHelper.State.ERROR)
+            return
+        }
+
+        ep32BluetoothHelper?.startAutoConnect()
+    }
+
+    private fun ensureEp32Permissions(): Boolean {
+        val requiredPermissions = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
+                requiredPermissions.add(Manifest.permission.BLUETOOTH_SCAN)
+            }
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                requiredPermissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+            }
+        } else {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                requiredPermissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
+            }
+        }
+
+        if (requiredPermissions.isNotEmpty()) {
+            ActivityCompat.requestPermissions(this, requiredPermissions.toTypedArray(), REQUEST_CODE_EP32_PERMISSIONS)
+            return false
+        }
+        return true
+    }
+
+    private fun handleEp32State(state: Ep32BluetoothHelper.State, detail: String?) {
+        updateEp32UiState(state)
+        when (state) {
+            Ep32BluetoothHelper.State.CONNECTED -> {
+                Log.i(TAG, "EP32 connected: ${detail ?: "unknown"}")
+            }
+            Ep32BluetoothHelper.State.ERROR -> {
+                Log.w(TAG, "EP32 state error: ${detail ?: "unknown"}")
+            }
+            else -> Unit
+        }
+    }
+
+    private fun updateEp32UiState(state: Ep32BluetoothHelper.State) {
+        val statusText = ep32BluetoothStatusText ?: return
+        when (state) {
+            Ep32BluetoothHelper.State.CONNECTED -> {
+                statusText.text = getString(R.string.ep32_status_connected)
+                statusText.setTextColor(Color.parseColor("#00FF00"))
+                ep32ControlPanel?.visibility = View.VISIBLE
+            }
+            Ep32BluetoothHelper.State.SCANNING -> {
+                statusText.text = getString(R.string.ep32_status_scanning)
+                statusText.setTextColor(Color.parseColor("#FFCC00"))
+                ep32ControlPanel?.visibility = View.GONE
+            }
+            Ep32BluetoothHelper.State.CONNECTING -> {
+                statusText.text = getString(R.string.ep32_status_connecting)
+                statusText.setTextColor(Color.parseColor("#FFCC00"))
+                ep32ControlPanel?.visibility = View.GONE
+            }
+            Ep32BluetoothHelper.State.ERROR -> {
+                statusText.text = getString(R.string.ep32_status_error)
+                statusText.setTextColor(Color.parseColor("#FF4444"))
+                ep32ControlPanel?.visibility = View.GONE
+            }
+            Ep32BluetoothHelper.State.OFF -> {
+                statusText.text = getString(R.string.ep32_status_off)
+                statusText.setTextColor(Color.parseColor("#FF4444"))
+                ep32ControlPanel?.visibility = View.GONE
+            }
+        }
     }
 
     private fun stopAutoIpRefresh() {
@@ -1358,6 +1584,8 @@ class MainActivity : AppCompatActivity() {
         val rootView = viewBinding.root
         val ipAddressContainer = findViewById<android.view.ViewGroup>(R.id.ipAddressContainer)
         val detectionSessionContainer = findViewById<android.view.ViewGroup>(R.id.detectionSessionContainer)
+        val ep32BluetoothContainer = findViewById<android.view.ViewGroup>(R.id.ep32BluetoothContainer)
+        val ep32ControlPanelContainer = findViewById<android.widget.FrameLayout>(R.id.ep32ControlPanel)
         val settingsButton = findViewById<ImageButton>(R.id.settingsButton)
         val switchCameraButton = findViewById<ImageButton>(R.id.switchCameraButton)
         val hidePreviewButton = findViewById<ImageButton>(R.id.hidePreviewButton)
@@ -1367,6 +1595,8 @@ class MainActivity : AppCompatActivity() {
             viewFinder.visibility = View.GONE
             ipAddressContainer.visibility = View.GONE
             detectionSessionContainer.visibility = View.GONE
+            ep32BluetoothContainer.visibility = View.GONE
+            ep32ControlPanelContainer.visibility = View.GONE
             settingsButton.visibility = View.GONE
             switchCameraButton.visibility = View.GONE
             audioToggleButton.visibility = View.GONE
@@ -1376,6 +1606,8 @@ class MainActivity : AppCompatActivity() {
             viewFinder.visibility = View.VISIBLE
             ipAddressContainer.visibility = View.VISIBLE
             detectionSessionContainer.visibility = View.VISIBLE
+            ep32BluetoothContainer.visibility = View.VISIBLE
+            ep32ControlPanelContainer.visibility = if (ep32BluetoothHelper?.isConnected() == true) View.VISIBLE else View.GONE
             settingsButton.visibility = View.VISIBLE
             switchCameraButton.visibility = View.VISIBLE
             audioToggleButton.visibility = View.VISIBLE
@@ -1582,9 +1814,18 @@ class MainActivity : AppCompatActivity() {
             statusTextView.text = getString(
                 if (connected) R.string.server_connection_on else R.string.server_connection_off
             )
-            statusTextView.setTextColor(
-                if (connected) Color.parseColor("#00FF00") else Color.parseColor("#FF4444")
-            )
+            val onlineColor = if (connected) Color.parseColor("#00E676") else Color.parseColor("#FF5252")
+            statusTextView.setTextColor(onlineColor)
+
+            // Update connection dot indicator
+            val connectionDot = findViewById<View>(R.id.connectionDot)
+            connectionDot?.let {
+                it.background = if (connected) {
+                    getDrawable(R.drawable.status_indicator_online)
+                } else {
+                    getDrawable(R.drawable.status_indicator_offline)
+                }
+            }
         }
     }
 
@@ -1643,6 +1884,9 @@ class MainActivity : AppCompatActivity() {
             startAutoIpRefreshUntilConnected()
         }
         ensureAudioPermissionRequested()
+        if (isEp32Enabled) {
+            startEp32AutoConnectIfAllowed()
+        }
     }
 
     override fun onStop() {
@@ -1653,6 +1897,7 @@ class MainActivity : AppCompatActivity() {
         stopAutoIpRefresh()
         shouldRestartServerOnResume = true
         lanDiscoveryBeaconHelper?.stop()
+        ep32BluetoothHelper?.stop()
         lifecycleScope.launch(Dispatchers.IO) {
             streamingServerHelper?.stopStreamingServer()
         }
@@ -1676,6 +1921,7 @@ class MainActivity : AppCompatActivity() {
         tinySAHelper?.closeConnection()
         streamingServerHelper?.stopStreamingServer()
         lanDiscoveryBeaconHelper?.stop()
+        ep32BluetoothHelper?.stop()
         stopTinySAConnectionCheck()
         unregisterUsbReceiver()
         
@@ -1928,7 +2174,9 @@ class MainActivity : AppCompatActivity() {
         private const val MAX_RECENT_DETECTIONS = 25
         private const val REQUEST_CODE_PERMISSIONS = 10
         private const val REQUEST_CODE_AUDIO_PERMISSION = 11
+        private const val REQUEST_CODE_EP32_PERMISSIONS = 12
         private const val MAX_CLIENTS = 3  // Limit concurrent connections
+        private const val PREF_EP32_ENABLED = "ep32_bluetooth_enabled"
         private val REQUIRED_PERMISSIONS = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             arrayOf(Manifest.permission.CAMERA)
         } else {
