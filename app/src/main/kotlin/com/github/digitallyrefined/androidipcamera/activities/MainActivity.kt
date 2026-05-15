@@ -57,6 +57,7 @@ import com.github.digitallyrefined.androidipcamera.helpers.AudioCaptureHelper
 import com.github.digitallyrefined.androidipcamera.helpers.CameraResolutionHelper
 import com.github.digitallyrefined.androidipcamera.helpers.Ep32BluetoothHelper
 import com.github.digitallyrefined.androidipcamera.helpers.LanDiscoveryBeaconHelper
+import com.github.digitallyrefined.androidipcamera.helpers.MicArrayWiring
 import com.github.digitallyrefined.androidipcamera.helpers.StreamingServerHelper
 import com.github.digitallyrefined.androidipcamera.helpers.TinySACommandParser
 import com.github.digitallyrefined.androidipcamera.helpers.TinySAHelper
@@ -108,11 +109,42 @@ class MainActivity : AppCompatActivity() {
     private var ep32BluetoothStatusText: TextView? = null
     private var ep32ControlPanel: View? = null
     private var isEp32Enabled = false
+
+    // ───── Selector de fuente de audio para Keras (phone vs ESP32 array) ─────
+    // El servidor consume PCM16 mono 44100 vía /audio. Cuando la fuente es el
+    // micro del móvil, AudioCaptureHelper alimenta sendAudioData directamente.
+    // Cuando la fuente es el array ESP32, recibimos PCM16 mono a 8 kHz por SPP
+    // (firmware AUDIO_ON), lo upsampleamos a 44100 con interpolación lineal y
+    // lo metemos por el mismo sendAudioData. El servidor no nota la diferencia
+    // de origen salvo por las cabeceras `X-Audio-Source` / `Content-Type` que
+    // StreamingServerHelper inyecta. La preferencia persiste en SharedPrefs.
+    private var audioSource: String = AUDIO_SOURCE_PHONE_MIC
+    private var lastArrayAudioFrameTs: Long = 0L
+    private var lastArrayAudioSampleRate: Int = 0
+    private val arrayAudioFramesIn = java.util.concurrent.atomic.AtomicLong(0)
+    private val arrayAudioFramesForwarded = java.util.concurrent.atomic.AtomicLong(0)
+    private val arrayAudioFramesPrefetchBuffered = java.util.concurrent.atomic.AtomicLong(0)
+    private val arrayAudioFramesDropped = java.util.concurrent.atomic.AtomicLong(0)
+    private val arrayAudioBytesForwarded = java.util.concurrent.atomic.AtomicLong(0)
+    private val phoneMicBytesSent = java.util.concurrent.atomic.AtomicLong(0)
+    private val audioStatusStartMs: Long = System.currentTimeMillis()
+    @Volatile private var arrayUpsamplerLastSample: Short = 0  // estado interp.
+
+    // Cola acotada (back-pressure) entre el reader Bluetooth (productor) y el
+    // worker que upsamplea+envía al server (consumidor). Tamaño 4 frames
+    // ~= 400 ms de buffer a 100 ms/frame. Cuando se llena, descartamos los
+    // frames más antiguos: para Keras importa la última ventana, no la cola
+    // histórica. El reader nunca se bloquea, así que las flechas y el
+    // resto del puente BT no se ralentizan.
+    private val arrayAudioQueue =
+        java.util.concurrent.ArrayBlockingQueue<Ep32BluetoothHelper.AudioFrame>(4)
+    @Volatile private var arrayAudioWorker: Thread? = null
+    private val arrayAudioWorkerRunning = java.util.concurrent.atomic.AtomicBoolean(false)
     private var yoloDetections = 0
     private var tensorflowDetections = 0
     private var rfDetections = 0
     private val recentDetectionEvents = mutableListOf<String>()
-    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
         when (key) {
             "image_quality", "stream_delay" -> {
                 // These changes don't require camera restart, just log
@@ -121,6 +153,16 @@ class MainActivity : AppCompatActivity() {
             "camera_resolution" -> {
                 // Resolution change requires camera restart (handled in SettingsActivity)
                 Log.d(TAG, "Resolution changed, will restart camera")
+            }
+            PREF_AUDIO_SOURCE -> {
+                val newValue = prefs?.getString(PREF_AUDIO_SOURCE, AUDIO_SOURCE_PHONE_MIC)
+                    ?: AUDIO_SOURCE_PHONE_MIC
+                if (newValue != audioSource) {
+                    // applyAudioSource ya persiste, pero al venir el cambio del
+                    // Settings dialog la preferencia YA está escrita; usamos
+                    // persist=false para no escribir dos veces.
+                    runOnUiThread { applyAudioSource(newValue, persist = false) }
+                }
             }
         }
     }
@@ -287,11 +329,24 @@ class MainActivity : AppCompatActivity() {
             onEp32Command = { commandRequest ->
                 handleEp32CommandRequest(commandRequest)
             },
+            onEp32Control = { controlRequest ->
+                handleEp32ControlRequest(controlRequest)
+            },
             getTinySAStatus = {
                 isTinySAConnected
             },
             getMicArrayStatus = {
                 buildMicArrayStatusJson()
+            },
+            getEp32Status = {
+                buildEp32StatusJson()
+            },
+            getAudioSourceStatus = {
+                buildAudioSourceStatusJson()
+            },
+            onAudioSourceRequest = { canonical ->
+                runOnUiThread { applyAudioSource(canonical) }
+                true
             },
             bindIpAddress = bindIp
         )
@@ -527,11 +582,26 @@ class MainActivity : AppCompatActivity() {
         val audioSampleRate = 44100
         val channelConfig = android.media.AudioFormat.CHANNEL_IN_MONO
         audioCaptureHelper = AudioCaptureHelper(audioSampleRate, channelConfig)
+        // El listener vuelve a ser exactamente el original: NO filtra por
+        // audio_source. La garantía de single-stream se hace ARRIBA: cuando
+        // la fuente es esp32_array, llamamos a stopRecording() y AudioRecord
+        // deja de generar bytes. Filtrar aquí era frágil y abría la puerta
+        // a "audio activado pero micro no envia nada" cuando el flag local
+        // y la preferencia se desincronizaban (causa del bug reportado).
         audioCaptureHelper?.addAudioDataListener { audioData ->
-            if (isAudioEnabled && streamingServerHelper?.getAudioClients()?.isNotEmpty() == true) {
+            if (isAudioEnabled &&
+                streamingServerHelper?.getAudioClients()?.isNotEmpty() == true) {
                 streamingServerHelper?.sendAudioData(audioData)
+                phoneMicBytesSent.addAndGet(audioData.size.toLong())
             }
         }
+        // Carga inicial de la fuente persistida. Sólo lectura: la transición
+        // efectiva (start/stop AudioRecord + AUDIO_ON/OFF al ESP32) se hace
+        // a través de applyAudioSource() cuando la UI esté lista para
+        // mostrar toasts.
+        audioSource = PreferenceManager.getDefaultSharedPreferences(this)
+            .getString(PREF_AUDIO_SOURCE, AUDIO_SOURCE_PHONE_MIC)
+            ?: AUDIO_SOURCE_PHONE_MIC
         
         // Add audio toggle button
         val audioToggleButton = findViewById<ImageButton>(R.id.audioToggleButton)
@@ -694,10 +764,23 @@ class MainActivity : AppCompatActivity() {
             }
         } else if (requestCode == REQUEST_CODE_AUDIO_PERMISSION) {
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                if (audioCaptureHelper?.startRecording() == true) {
+                // Sólo abrimos AudioRecord si la fuente activa es el mic
+                // del móvil. Si la fuente es el array, RECORD_AUDIO está
+                // concedido pero el mic no debe abrirse — el array es la
+                // fuente.
+                if (audioSource == AUDIO_SOURCE_PHONE_MIC) {
+                    if (audioCaptureHelper?.startRecording() == true) {
+                        isAudioEnabled = true
+                        findViewById<ImageButton>(R.id.audioToggleButton)?.let { updateAudioButtonIcon(it) }
+                        Toast.makeText(this, getString(R.string.toast_audio_enabled), Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    // Permiso concedido pero la fuente es el array: sólo
+                    // marcamos audio activado y dejamos que applyAudioSource
+                    // mande AUDIO_ON cuando proceda.
                     isAudioEnabled = true
                     findViewById<ImageButton>(R.id.audioToggleButton)?.let { updateAudioButtonIcon(it) }
-                    Toast.makeText(this, getString(R.string.toast_audio_enabled), Toast.LENGTH_SHORT).show()
+                    applyAudioSource(audioSource, persist = false)
                 }
             } else {
                 Toast.makeText(this, getString(R.string.toast_audio_permission_required), Toast.LENGTH_SHORT).show()
@@ -1143,6 +1226,7 @@ class MainActivity : AppCompatActivity() {
             onLog = { message -> Log.d(TAG, "[EP32] $message") },
             onHeartbeat = { hb -> forwardMicArrayHeartbeat(hb) },
             onAcoustic = { ac -> forwardMicArrayAcoustic(ac) },
+            onAudioFrame = { frame -> handleEsp32AudioFrame(frame) },
             onUnknownPayload = { raw ->
                 Log.d(TAG, "[EP32] unknown JSONL payload: ${raw.take(160)}")
             }
@@ -1151,16 +1235,7 @@ class MainActivity : AppCompatActivity() {
 
         ep32BluetoothSwitch?.setOnCheckedChangeListener(null)
         ep32BluetoothSwitch?.isChecked = isEp32Enabled
-        ep32BluetoothSwitch?.setOnCheckedChangeListener { _, isChecked ->
-            isEp32Enabled = isChecked
-            prefs.edit().putBoolean(PREF_EP32_ENABLED, isChecked).apply()
-            if (isChecked) {
-                startEp32AutoConnectIfAllowed()
-            } else {
-                ep32BluetoothHelper?.stop()
-                updateEp32UiState(Ep32BluetoothHelper.State.OFF)
-            }
-        }
+        setupEp32SwitchListener()
 
         setupEp32ButtonBindings()
         updateEp32UiState(Ep32BluetoothHelper.State.OFF)
@@ -1171,10 +1246,57 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupEp32ButtonBindings() {
-        findViewById<ImageButton>(R.id.dpadUp)?.setOnClickListener { sendEp32Command("UP") }
-        findViewById<ImageButton>(R.id.dpadDown)?.setOnClickListener { sendEp32Command("DOWN") }
-        findViewById<ImageButton>(R.id.dpadLeft)?.setOnClickListener { sendEp32Command("LEFT") }
-        findViewById<ImageButton>(R.id.dpadRight)?.setOnClickListener { sendEp32Command("RIGHT") }
+        // Hold-to-move: ACTION_DOWN -> HOLD_<DIR>, ACTION_UP/CANCEL -> RELEASE.
+        // Firmware v0.4.0+ mantiene el optoacoplador activo y el server (o
+        // este propio handler) refrescaría con HOLD_* si quisiéramos
+        // mantener el watchdog feliz. Aquí mandamos un solo HOLD al
+        // pulsar y dejamos al firmware mantener (watchdog 2 s desde el
+        // último HOLD; un movimiento continuo entre Android y el ESP32
+        // sólo dura mientras dedo toca pantalla, que típicamente es
+        // <2 s; si el usuario necesita más se reenvía abajo).
+        bindDpadHoldButton(R.id.dpadUp, "HOLD_UP")
+        bindDpadHoldButton(R.id.dpadDown, "HOLD_DOWN")
+        bindDpadHoldButton(R.id.dpadLeft, "HOLD_LEFT")
+        bindDpadHoldButton(R.id.dpadRight, "HOLD_RIGHT")
+    }
+
+    @android.annotation.SuppressLint("ClickableViewAccessibility")
+    private fun bindDpadHoldButton(viewId: Int, holdCommand: String) {
+        val view = findViewById<ImageButton>(viewId) ?: return
+        // Refresca el HOLD cada 500 ms mientras el dedo sigue tocando
+        // (firmware watchdog = 2000 ms). Esto cubre el caso de pulsaciones
+        // largas sin depender del server.
+        val refreshRunnable = object : Runnable {
+            override fun run() {
+                sendEp32Command(holdCommand)
+                view.postDelayed(this, 500L)
+            }
+        }
+        view.setOnTouchListener { v, event ->
+            when (event.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    v.isPressed = true
+                    sendEp32Command(holdCommand)
+                    v.postDelayed(refreshRunnable, 500L)
+                    true
+                }
+                android.view.MotionEvent.ACTION_UP,
+                android.view.MotionEvent.ACTION_CANCEL,
+                android.view.MotionEvent.ACTION_OUTSIDE -> {
+                    v.isPressed = false
+                    v.removeCallbacks(refreshRunnable)
+                    sendEp32Command("RELEASE")
+                    v.performClick()  // a11y compliance
+                    true
+                }
+                else -> false
+            }
+        }
+        // performClick fallback (a11y): pulsación corta = un HOLD breve y RELEASE.
+        view.setOnClickListener {
+            sendEp32Command(holdCommand)
+            view.postDelayed({ sendEp32Command("RELEASE") }, 250L)
+        }
     }
 
     private fun sendEp32Command(command: String): Boolean {
@@ -1189,14 +1311,151 @@ class MainActivity : AppCompatActivity() {
         return sendEp32Command(command)
     }
 
+    // Server-driven control of the Android-side ESP32 Bluetooth bridge. The
+    // phone is the BT master: the ADAS3 server has NO BT link of its own and
+    // must never try to scan. From here, `enable` flips the same path used by
+    // the UI toggle (`PREF_EP32_ENABLED` + startAutoConnect). `reconnect`
+    // bounces the link without touching the preference. `disable`/`stop` tear
+    // it down. Replies always include a status snapshot so the server can
+    // poll `/adas3/ep32-status` afterwards (or just inspect the body).
+    private fun handleEp32ControlRequest(
+        request: StreamingServerHelper.Ep32ControlRequest
+    ): StreamingServerHelper.Ep32ControlResult {
+        val helper = ep32BluetoothHelper
+        if (helper == null) {
+            return StreamingServerHelper.Ep32ControlResult(
+                accepted = false,
+                httpStatus = 503,
+                statusJson = "{\"status\":\"helper_unavailable\"}"
+            )
+        }
+        runOnUiThread {
+            when (request.action) {
+                StreamingServerHelper.Ep32ControlAction.ENABLE -> {
+                    isEp32Enabled = true
+                    PreferenceManager.getDefaultSharedPreferences(this)
+                        .edit().putBoolean(PREF_EP32_ENABLED, true).apply()
+                    ep32BluetoothSwitch?.setOnCheckedChangeListener(null)
+                    ep32BluetoothSwitch?.isChecked = true
+                    setupEp32SwitchListener()
+                    startEp32AutoConnectIfAllowed()
+                }
+                StreamingServerHelper.Ep32ControlAction.DISABLE,
+                StreamingServerHelper.Ep32ControlAction.STOP -> {
+                    isEp32Enabled = false
+                    PreferenceManager.getDefaultSharedPreferences(this)
+                        .edit().putBoolean(PREF_EP32_ENABLED, false).apply()
+                    ep32BluetoothSwitch?.setOnCheckedChangeListener(null)
+                    ep32BluetoothSwitch?.isChecked = false
+                    setupEp32SwitchListener()
+                    helper.stop()
+                    updateEp32UiState(Ep32BluetoothHelper.State.OFF)
+                }
+                StreamingServerHelper.Ep32ControlAction.RECONNECT -> {
+                    // Bounce the link without touching the preference. We
+                    // call stop+start back-to-back; startAutoConnect already
+                    // handles permissions and adapter checks.
+                    helper.stop()
+                    if (isEp32Enabled) {
+                        startEp32AutoConnectIfAllowed()
+                    }
+                }
+            }
+        }
+        return StreamingServerHelper.Ep32ControlResult(
+            accepted = true,
+            httpStatus = 202,
+            statusJson = buildEp32StatusJson()
+        )
+    }
+
+    // Refactored switch-listener setup so the control endpoint can re-attach
+    // it after a programmatic flip without duplicating logic.
+    private fun setupEp32SwitchListener() {
+        val prefs = PreferenceManager.getDefaultSharedPreferences(this)
+        ep32BluetoothSwitch?.setOnCheckedChangeListener { _, isChecked ->
+            isEp32Enabled = isChecked
+            prefs.edit().putBoolean(PREF_EP32_ENABLED, isChecked).apply()
+            if (isChecked) {
+                startEp32AutoConnectIfAllowed()
+            } else {
+                ep32BluetoothHelper?.stop()
+                updateEp32UiState(Ep32BluetoothHelper.State.OFF)
+            }
+        }
+    }
+
+    private fun buildEp32StatusJson(): String {
+        val helper = ep32BluetoothHelper
+        val state = helper?.currentState() ?: Ep32BluetoothHelper.State.OFF
+        val detail = helper?.currentStateDetail()
+        val connected = helper?.isConnected() == true
+        val active = helper?.isActive() == true
+        val adapter = BluetoothAdapter.getDefaultAdapter()
+        val btAdapterEnabled = adapter != null && adapter.isEnabled
+        val hasPerms = hasEp32Permissions()
+        val hb = helper?.getLastHeartbeat()
+        val sb = StringBuilder()
+        sb.append("{")
+        sb.append("\"connected\":").append(connected)
+        sb.append(",\"state\":\"").append(state.name).append("\"")
+        detail?.let { sb.append(",\"detail\":").append(org.json.JSONObject.quote(it)) }
+        sb.append(",\"enabled\":").append(isEp32Enabled)
+        sb.append(",\"active\":").append(active)
+        sb.append(",\"bt_adapter_enabled\":").append(btAdapterEnabled)
+        sb.append(",\"permissions_granted\":").append(hasPerms)
+        if (hb != null) {
+            sb.append(",\"firmware\":")
+                .append(hb.firmware?.let { org.json.JSONObject.quote(it) } ?: "null")
+            sb.append(",\"mic_count\":").append(effectiveMicCount(hb.micCount))
+        }
+        sb.append("}")
+        return sb.toString()
+    }
+
+    // Mirror of ensureEp32Permissions() but read-only: never triggers a
+    // permission prompt. The server uses this hint to know whether to ask
+    // the user via the Android UI to grant permissions before calling
+    // `/adas3/ep32-control` with `action=enable`.
+    private fun hasEp32Permissions(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(
+                this, Manifest.permission.BLUETOOTH_SCAN
+            ) == PackageManager.PERMISSION_GRANTED &&
+                ContextCompat.checkSelfPermission(
+                    this, Manifest.permission.BLUETOOTH_CONNECT
+                ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            ContextCompat.checkSelfPermission(
+                this, Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
     // Mic-array bridging: payloads come in via Bluetooth SPP from the ESP32
-    // (which does the I2S beamforming/GCC-PHAT locally) and are forwarded as-is
-    // to the ADAS3 server through the streaming HTTP server already exposed by
-    // this client. Phone-mic audio path is unaffected.
+    // (which does the I2S beamforming/GCC-PHAT locally on 4 mics across 2 I2S
+    // pairs) and are forwarded to the ADAS3 server through the HTTP server
+    // already exposed by this client. Phone-mic audio path is unaffected and
+    // Telegram is NOT triggered from here (the server is responsible for
+    // queueing an internal `acoustic_array` event to avoid duplicate alerts).
+    //
+    // The firmware may emit the legacy minimal contract (mic_count alone) or
+    // an enriched payload (pair/bus/wiring/config). If wiring is missing the
+    // client injects the definitive wiring from `MicArrayWiring` so the
+    // server always receives a fully-described event.
     private fun forwardMicArrayHeartbeat(hb: Ep32BluetoothHelper.Heartbeat) {
-        val firmware = hb.firmware?.let { org.json.JSONObject.quote(it) } ?: "null"
-        val payload = "{\"type\":\"heartbeat\",\"mic_count\":${hb.micCount},\"firmware\":$firmware}"
-        streamingServerHelper?.sendMicArrayPayload(payload)
+        val sb = StringBuilder()
+        sb.append("{\"type\":\"heartbeat\"")
+        sb.append(",\"mic_count\":").append(effectiveMicCount(hb.micCount))
+        val fw = hb.firmware?.let { org.json.JSONObject.quote(it) } ?: "null"
+        sb.append(",\"firmware\":").append(fw)
+        hb.pair?.let { sb.append(",\"pair\":").append(org.json.JSONObject.quote(it)) }
+        hb.bus?.let { sb.append(",\"bus\":").append(org.json.JSONObject.quote(it)) }
+        sb.append(",\"wiring\":").append(hb.wiringJson ?: MicArrayWiring.toJson())
+        hb.configJson?.let { sb.append(",\"config\":").append(it) }
+        appendExtras(sb, hb.extras)
+        sb.append("}")
+        streamingServerHelper?.sendMicArrayPayload(sb.toString())
     }
 
     private fun forwardMicArrayAcoustic(ac: Ep32BluetoothHelper.Acoustic) {
@@ -1205,9 +1464,31 @@ class MainActivity : AppCompatActivity() {
         ac.doaDeg?.let { sb.append(",\"doa_deg\":").append(it) }
         ac.energy?.let { sb.append(",\"energy\":").append(it) }
         ac.confidence?.let { sb.append(",\"confidence\":").append(it) }
-        ac.micCount?.let { sb.append(",\"mic_count\":").append(it) }
+        sb.append(",\"mic_count\":").append(effectiveMicCount(ac.micCount))
+        ac.pair?.let { sb.append(",\"pair\":").append(org.json.JSONObject.quote(it)) }
+        ac.bus?.let { sb.append(",\"bus\":").append(org.json.JSONObject.quote(it)) }
+        sb.append(",\"wiring\":").append(ac.wiringJson ?: MicArrayWiring.toJson())
+        ac.configJson?.let { sb.append(",\"config\":").append(it) }
+        appendExtras(sb, ac.extras)
         sb.append("}")
         streamingServerHelper?.sendMicArrayPayload(sb.toString())
+    }
+
+    // If the firmware reports a mic_count we keep it for traceability, but if
+    // it is missing or implausible (<= 0) we force the definitive count (4)
+    // so the server always sees the real soldered topology.
+    private fun effectiveMicCount(reported: Int?): Int {
+        return when {
+            reported == null -> MicArrayWiring.MIC_COUNT
+            reported <= 0 -> MicArrayWiring.MIC_COUNT
+            else -> reported
+        }
+    }
+
+    private fun appendExtras(sb: StringBuilder, extras: Map<String, String>) {
+        for ((k, v) in extras) {
+            sb.append(",").append(org.json.JSONObject.quote(k)).append(":").append(v)
+        }
     }
 
     private fun buildMicArrayStatusJson(): String {
@@ -1217,18 +1498,308 @@ class MainActivity : AppCompatActivity() {
         val ac = helper?.getLastAcoustic()
         val sb = StringBuilder()
         sb.append("{\"connected\":").append(connected)
+        // Always advertise the definitive wiring so the server can pick it up
+        // even when no heartbeat has arrived yet.
+        sb.append(",\"wiring\":").append(MicArrayWiring.toJson())
         if (hb != null) {
-            sb.append(",\"heartbeat\":{\"mic_count\":").append(hb.micCount)
+            sb.append(",\"heartbeat\":{\"mic_count\":").append(effectiveMicCount(hb.micCount))
             val fw = hb.firmware?.let { org.json.JSONObject.quote(it) } ?: "null"
-            sb.append(",\"firmware\":").append(fw).append("}")
+            sb.append(",\"firmware\":").append(fw)
+            hb.pair?.let { sb.append(",\"pair\":").append(org.json.JSONObject.quote(it)) }
+            hb.bus?.let { sb.append(",\"bus\":").append(org.json.JSONObject.quote(it)) }
+            sb.append("}")
         }
         if (ac != null) {
             sb.append(",\"last_acoustic\":{\"detected\":").append(ac.detected)
             ac.doaDeg?.let { sb.append(",\"doa_deg\":").append(it) }
             ac.energy?.let { sb.append(",\"energy\":").append(it) }
             ac.confidence?.let { sb.append(",\"confidence\":").append(it) }
-            ac.micCount?.let { sb.append(",\"mic_count\":").append(it) }
+            sb.append(",\"mic_count\":").append(effectiveMicCount(ac.micCount))
+            ac.pair?.let { sb.append(",\"pair\":").append(org.json.JSONObject.quote(it)) }
+            ac.bus?.let { sb.append(",\"bus\":").append(org.json.JSONObject.quote(it)) }
             sb.append("}")
+        }
+        sb.append("}")
+        return sb.toString()
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Audio source selector: ESP32 array vs phone mic
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * Carga la preferencia de fuente de audio y aplica el efecto correspondiente
+     * (arrancar/parar AudioRecord, mandar AUDIO_ON/OFF al ESP32).
+     */
+    /**
+     * Coordinador único de transición de fuente de audio. Cualquier
+     * cambio (UI, Settings, server POST, arranque) debe pasar por aquí.
+     *
+     * Garantías:
+     * - Persiste la nueva preferencia (a menos que persist=false porque ya
+     *   se persistió por otra vía, p. ej. cuando el cambio viene del
+     *   Settings dialog).
+     * - Si la nueva fuente es PHONE_MIC: para definitivamente cualquier
+     *   stream del array (AUDIO_OFF al ESP32, drena cola, para worker) Y
+     *   abre el AudioRecord si `isAudioEnabled` y hay permiso.
+     * - Si la nueva fuente es ESP32_ARRAY: para AudioRecord Y lanza el
+     *   worker + manda AUDIO_ON al ESP32 si el puente está conectado.
+     *   El re-AUDIO_ON tras reconexión SPP lo hace `handleEp32State`.
+     * - Idempotente: llamar dos veces con la misma fuente no rompe nada.
+     *
+     * Llamar SIEMPRE en el hilo de UI (runOnUiThread si vienes de I/O).
+     */
+    private fun applyAudioSource(newSource: String, persist: Boolean = true) {
+        val normalized = when (newSource) {
+            AUDIO_SOURCE_ESP32_ARRAY -> AUDIO_SOURCE_ESP32_ARRAY
+            else -> AUDIO_SOURCE_PHONE_MIC
+        }
+        val prev = audioSource
+        audioSource = normalized
+        if (persist) {
+            PreferenceManager.getDefaultSharedPreferences(this)
+                .edit().putString(PREF_AUDIO_SOURCE, normalized).apply()
+        }
+        Log.i(TAG, "[AUDIO] source: $prev -> $normalized (audioEnabled=$isAudioEnabled)")
+        when (normalized) {
+            AUDIO_SOURCE_PHONE_MIC -> switchToPhoneMicSource(showToast = prev != normalized)
+            AUDIO_SOURCE_ESP32_ARRAY -> switchToEsp32ArraySource(showToast = prev != normalized)
+        }
+    }
+
+    private fun switchToPhoneMicSource(showToast: Boolean) {
+        // 1. Asegurar que el array NO sigue mandando: AUDIO_OFF al ESP32,
+        //    drenar cola y parar worker para no acumular bytes residuales.
+        ep32BluetoothHelper?.let {
+            if (it.isConnected()) it.requestAudioOff()
+        }
+        stopArrayAudioWorker()
+
+        // 2. Abrir el mic del móvil sólo si el usuario ha pedido audio
+        //    encendido y hay permiso. Si no lo hay, lo pedimos para que
+        //    el flujo legacy funcione exactamente como antes del selector.
+        if (isAudioEnabled) {
+            if (ContextCompat.checkSelfPermission(this,
+                    Manifest.permission.RECORD_AUDIO)
+                == PackageManager.PERMISSION_GRANTED) {
+                if (audioCaptureHelper?.isRecording() != true) {
+                    audioCaptureHelper?.startRecording()
+                }
+            } else if (!hasRequestedAudioPermission) {
+                hasRequestedAudioPermission = true
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(Manifest.permission.RECORD_AUDIO),
+                    REQUEST_CODE_AUDIO_PERMISSION,
+                )
+            }
+        }
+        if (showToast) {
+            Toast.makeText(this, "Audio: micrófono del móvil", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun switchToEsp32ArraySource(showToast: Boolean) {
+        // 1. Parar el AudioRecord del móvil: ya no debe generar bytes.
+        audioCaptureHelper?.stopRecording()
+
+        // 2. Preparar el worker que upsamplea+envía PCM del array, AUN
+        //    SI todavía no llegan frames. Así el primer frame que entre
+        //    se procesa sin demora.
+        if (isAudioEnabled) ensureArrayAudioWorker()
+
+        // 3. Pedir al firmware que empiece a emitir. Si BT no está aún
+        //    conectado, `handleEp32State(CONNECTED)` re-enviará AUDIO_ON.
+        val helper = ep32BluetoothHelper
+        if (helper != null && helper.isConnected() && isAudioEnabled) {
+            helper.requestAudioOn()
+        }
+
+        if (showToast) {
+            val msg = if (helper?.isConnected() == true)
+                "Audio: ESP32 array (AUDIO_ON)"
+            else
+                "Audio: ESP32 array (esperando conexión Bluetooth)"
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
+     * Frame PCM16 mono recibido del ESP32 a 8 kHz. Para no bloquear el
+     * hilo del reader Bluetooth ni introducir picos en el envío HTTP,
+     * encolamos a una cola acotada y dejamos que un worker dedicado haga
+     * el upsample + sendAudioData. Si la cola está llena, descartamos el
+     * frame más antiguo (drop-oldest): Keras tolera saltos cortos mejor
+     * que latencia acumulada o que la pérdida de FPS del video.
+     */
+    private fun handleEsp32AudioFrame(frame: Ep32BluetoothHelper.AudioFrame) {
+        arrayAudioFramesIn.incrementAndGet()
+        lastArrayAudioFrameTs = System.currentTimeMillis()
+        lastArrayAudioSampleRate = frame.sampleRate
+        if (audioSource != AUDIO_SOURCE_ESP32_ARRAY) return
+        if (!isAudioEnabled) return
+        if (frame.pcm.isEmpty() || frame.pcm.size % 2 != 0) return
+
+        // Back-pressure: si la cola está llena, descartamos el más antiguo
+        // y metemos el nuevo. `offer` no bloquea.
+        if (!arrayAudioQueue.offer(frame)) {
+            val dropped = arrayAudioQueue.poll()
+            if (dropped != null) {
+                arrayAudioFramesDropped.incrementAndGet()
+            }
+            arrayAudioQueue.offer(frame)
+        }
+        ensureArrayAudioWorker()
+    }
+
+    private fun ensureArrayAudioWorker() {
+        if (arrayAudioWorkerRunning.get()) return
+        if (!arrayAudioWorkerRunning.compareAndSet(false, true)) return
+        val t = Thread({
+            try {
+                while (arrayAudioWorkerRunning.get()) {
+                    val frame = arrayAudioQueue.poll(
+                        500, java.util.concurrent.TimeUnit.MILLISECONDS
+                    ) ?: continue
+                    // Gates secundarios: si la fuente cambió mientras el
+                    // frame estaba en cola, descartar.
+                    if (audioSource != AUDIO_SOURCE_ESP32_ARRAY) continue
+                    if (!isAudioEnabled) continue
+                    val srcRate = if (frame.sampleRate > 0) frame.sampleRate
+                                  else ARRAY_AUDIO_SOURCE_RATE
+                    val resampled = upsamplePcm16Mono(
+                        frame.pcm, srcRate, ANDROID_AUDIO_SAMPLE_RATE
+                    )
+                    if (resampled.isNotEmpty()) {
+                        // Siempre upsample + sendAudioData: si aún no hay GET
+                        // /audio, StreamingServerHelper guarda en prefetch y
+                        // vacía al conectar el server (ADAS3 testcam).
+                        streamingServerHelper?.sendAudioData(resampled)
+                        if (streamingServerHelper?.getAudioClients()?.isNotEmpty() == true) {
+                            arrayAudioFramesForwarded.incrementAndGet()
+                            arrayAudioBytesForwarded.addAndGet(resampled.size.toLong())
+                        } else {
+                            arrayAudioFramesPrefetchBuffered.incrementAndGet()
+                        }
+                    }
+                }
+            } catch (e: InterruptedException) {
+                // shutdown
+            } catch (e: Exception) {
+                Log.w(TAG, "[AUDIO] worker error: ${e.message}")
+            } finally {
+                arrayAudioWorkerRunning.set(false)
+            }
+        }, "array-audio-worker")
+        t.isDaemon = true
+        arrayAudioWorker = t
+        t.start()
+    }
+
+    private fun stopArrayAudioWorker() {
+        arrayAudioWorkerRunning.set(false)
+        arrayAudioWorker?.interrupt()
+        arrayAudioWorker = null
+        arrayAudioQueue.clear()
+        arrayUpsamplerLastSample = 0
+    }
+
+    /**
+     * Upsampler PCM16 mono → PCM16 mono con interpolación lineal.
+     * src y dst son little-endian (formato AudioRecord ENCODING_PCM_16BIT).
+     */
+    private fun upsamplePcm16Mono(src: ByteArray, srcRate: Int, dstRate: Int): ByteArray {
+        if (srcRate <= 0 || dstRate <= 0) return src
+        if (srcRate == dstRate) return src
+        val nSrc = src.size / 2
+        if (nSrc == 0) return ByteArray(0)
+        val srcShorts = ShortArray(nSrc + 1)
+        srcShorts[0] = arrayUpsamplerLastSample
+        for (i in 0 until nSrc) {
+            val lo = src[i * 2].toInt() and 0xFF
+            val hi = src[i * 2 + 1].toInt()
+            srcShorts[i + 1] = ((hi shl 8) or lo).toShort()
+        }
+        arrayUpsamplerLastSample = srcShorts[nSrc]
+        val nDst = (nSrc.toLong() * dstRate / srcRate).toInt()
+        if (nDst <= 0) return ByteArray(0)
+        val out = ByteArray(nDst * 2)
+        val ratio = srcRate.toDouble() / dstRate.toDouble()
+        for (j in 0 until nDst) {
+            val srcPos = 1.0 + j * ratio
+            val i0 = srcPos.toInt().coerceIn(0, nSrc)
+            val i1 = (i0 + 1).coerceAtMost(nSrc)
+            val frac = srcPos - i0
+            val s0 = srcShorts[i0].toInt()
+            val s1 = srcShorts[i1].toInt()
+            val interp = (s0 + (s1 - s0) * frac).toInt()
+            val clipped = when {
+                interp > Short.MAX_VALUE.toInt() -> Short.MAX_VALUE.toInt()
+                interp < Short.MIN_VALUE.toInt() -> Short.MIN_VALUE.toInt()
+                else -> interp
+            }
+            out[j * 2] = (clipped and 0xFF).toByte()
+            out[j * 2 + 1] = ((clipped shr 8) and 0xFF).toByte()
+        }
+        return out
+    }
+
+    /** Estado de la fuente de audio para el endpoint /adas3/audio-source.
+     *  Devuelve kbps efectivos hacia el servidor (mismo dato útil tanto
+     *  para phone_mic como para esp32_array, ya que ambos pasan por el
+     *  mismo sendAudioData → /audio). */
+    private fun buildAudioSourceStatusJson(): String {
+        val helper = ep32BluetoothHelper
+        val now = System.currentTimeMillis()
+        val uptimeMs = (now - audioStatusStartMs).coerceAtLeast(1L)
+        val phoneBytes = phoneMicBytesSent.get()
+        val arrayBytes = arrayAudioBytesForwarded.get()
+        // kbps efectivo desde el arranque de la app (medida estable).
+        val phoneKbps = (phoneBytes * 8.0 / uptimeMs).let { kb ->
+            String.format(java.util.Locale.US, "%.1f", kb)
+        }
+        val arrayKbps = (arrayBytes * 8.0 / uptimeMs).let { kb ->
+            String.format(java.util.Locale.US, "%.1f", kb)
+        }
+        val sb = StringBuilder()
+        sb.append("{\"source\":").append(org.json.JSONObject.quote(audioSource))
+        sb.append(",\"audio_enabled\":").append(isAudioEnabled)
+        sb.append(",\"encoding\":\"pcm16\"")
+        sb.append(",\"channels\":1")
+        sb.append(",\"sample_rate\":").append(ANDROID_AUDIO_SAMPLE_RATE)
+        sb.append(",\"phone_mic_kbps_avg\":").append(phoneKbps)
+        sb.append(",\"array_kbps_avg\":").append(arrayKbps)
+        if (audioSource == AUDIO_SOURCE_ESP32_ARRAY) {
+            val connected = helper?.isConnected() == true
+            sb.append(",\"array_audio_active\":").append(
+                connected && (now - lastArrayAudioFrameTs) < 5000L
+            )
+            sb.append(",\"array_audio_source_rate\":").append(
+                if (lastArrayAudioSampleRate > 0) lastArrayAudioSampleRate
+                else ARRAY_AUDIO_SOURCE_RATE
+            )
+            sb.append(",\"array_audio_frames_in\":").append(arrayAudioFramesIn.get())
+            sb.append(",\"array_audio_frames_forwarded\":")
+                .append(arrayAudioFramesForwarded.get())
+            sb.append(",\"array_audio_frames_prefetch_buffered\":")
+                .append(arrayAudioFramesPrefetchBuffered.get())
+            sb.append(",\"audio_http_listeners\":")
+                .append(streamingServerHelper?.getAudioClients()?.size ?: 0)
+            sb.append(",\"array_audio_frames_dropped\":")
+                .append(arrayAudioFramesDropped.get())
+            sb.append(",\"array_audio_queue_depth\":")
+                .append(arrayAudioQueue.size)
+            sb.append(",\"array_audio_worker_running\":")
+                .append(arrayAudioWorkerRunning.get())
+            sb.append(",\"array_audio_last_frame_age_ms\":").append(
+                if (lastArrayAudioFrameTs == 0L) -1L
+                else now - lastArrayAudioFrameTs
+            )
+            sb.append(",\"bridge_connected\":").append(connected)
+        } else {
+            sb.append(",\"array_audio_active\":false")
+            sb.append(",\"array_audio_frames_dropped\":")
+                .append(arrayAudioFramesDropped.get())
         }
         sb.append("}")
         return sb.toString()
@@ -1291,6 +1862,12 @@ class MainActivity : AppCompatActivity() {
         when (state) {
             Ep32BluetoothHelper.State.CONNECTED -> {
                 Log.i(TAG, "EP32 connected: ${detail ?: "unknown"}")
+                // Si la fuente de audio activa es el array, re-armar el
+                // streaming en cuanto el puente SPP esté disponible (cubre
+                // reconexiones tras pérdida de Bluetooth).
+                if (audioSource == AUDIO_SOURCE_ESP32_ARRAY) {
+                    ep32BluetoothHelper?.requestAudioOn()
+                }
             }
             Ep32BluetoothHelper.State.ERROR -> {
                 Log.w(TAG, "EP32 state error: ${detail ?: "unknown"}")
@@ -1736,21 +2313,35 @@ class MainActivity : AppCompatActivity() {
 
     private fun toggleAudio() {
         if (isAudioEnabled) {
-            audioCaptureHelper?.stopRecording()
+            // Apagar audio completamente. Cualquiera de las dos rutas:
+            // - phone_mic: stopRecording.
+            // - esp32_array: AUDIO_OFF al ESP32 + parar worker + drenar cola.
             isAudioEnabled = false
-            Toast.makeText(this, getString(R.string.toast_audio_disabled), Toast.LENGTH_SHORT).show()
-        } else {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                if (audioCaptureHelper?.startRecording() == true) {
-                    isAudioEnabled = true
-                    Toast.makeText(this, getString(R.string.toast_audio_enabled), Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(this, "Error al iniciar la captura de audio", Toast.LENGTH_SHORT).show()
-                }
-            } else {
-                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_CODE_AUDIO_PERMISSION)
+            audioCaptureHelper?.stopRecording()
+            stopArrayAudioWorker()
+            ep32BluetoothHelper?.let {
+                if (it.isConnected()) it.requestAudioOff()
             }
+            Toast.makeText(this, getString(R.string.toast_audio_disabled), Toast.LENGTH_SHORT).show()
+            return
         }
+        // Encender audio. Dejamos a applyAudioSource decidir qué stream se
+        // abre según la fuente activa. Para PHONE_MIC necesitamos permiso
+        // RECORD_AUDIO; si no lo hay, lo pedimos y el resto del flujo se
+        // completa desde onRequestPermissionsResult.
+        if (audioSource == AUDIO_SOURCE_PHONE_MIC &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.RECORD_AUDIO),
+                REQUEST_CODE_AUDIO_PERMISSION,
+            )
+            return
+        }
+        isAudioEnabled = true
+        applyAudioSource(audioSource, persist = false)
+        Toast.makeText(this, getString(R.string.toast_audio_enabled), Toast.LENGTH_SHORT).show()
     }
 
     private fun enableAudioByDefault(audioToggleButton: ImageButton) {
@@ -1758,15 +2349,22 @@ class MainActivity : AppCompatActivity() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             return
         }
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-            if (audioCaptureHelper?.startRecording() == true) {
+        if (audioSource == AUDIO_SOURCE_PHONE_MIC) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
                 isAudioEnabled = true
+                applyAudioSource(audioSource, persist = false)
                 updateAudioButtonIcon(audioToggleButton)
                 Toast.makeText(this, getString(R.string.toast_audio_enabled), Toast.LENGTH_SHORT).show()
+            } else if (!hasRequestedAudioPermission) {
+                hasRequestedAudioPermission = true
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_CODE_AUDIO_PERMISSION)
             }
-        } else if (!hasRequestedAudioPermission) {
-            hasRequestedAudioPermission = true
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_CODE_AUDIO_PERMISSION)
+        } else {
+            // audioSource = esp32_array: NO necesitamos permiso de micrófono;
+            // sólo arrancamos el worker + AUDIO_ON via applyAudioSource.
+            isAudioEnabled = true
+            applyAudioSource(audioSource, persist = false)
+            updateAudioButtonIcon(audioToggleButton)
         }
     }
 
@@ -2177,6 +2775,19 @@ class MainActivity : AppCompatActivity() {
         private const val REQUEST_CODE_EP32_PERMISSIONS = 12
         private const val MAX_CLIENTS = 3  // Limit concurrent connections
         private const val PREF_EP32_ENABLED = "ep32_bluetooth_enabled"
+
+        // ── Selector de fuente de audio ──────────────────────────────────
+        // Persistido en SharedPreferences. Default = micrófono del móvil
+        // (PHONE_MIC) para no romper a usuarios existentes.
+        const val PREF_AUDIO_SOURCE = "audio_source"
+        const val AUDIO_SOURCE_PHONE_MIC = "phone_mic"
+        const val AUDIO_SOURCE_ESP32_ARRAY = "esp32_array"
+
+        // El servidor espera PCM16 mono a este sample rate.
+        private const val ANDROID_AUDIO_SAMPLE_RATE = 44100
+        // El array ESP32 emite PCM16 mono a 8 kHz por SPP (limite ancho de
+        // banda Bluetooth Classic). Resampleamos a 44100 con interp lineal.
+        private const val ARRAY_AUDIO_SOURCE_RATE = 8000
         private val REQUIRED_PERMISSIONS = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             arrayOf(Manifest.permission.CAMERA)
         } else {

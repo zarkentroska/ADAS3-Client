@@ -37,8 +37,17 @@ class StreamingServerHelper(
     private val onTinySACommand: ((String) -> Unit)? = null,
     private val onDetectionEvent: ((DetectionEvent) -> Unit)? = null,
     private val onEp32Command: ((Ep32CommandRequest) -> Boolean)? = null,
+    private val onEp32Control: ((Ep32ControlRequest) -> Ep32ControlResult)? = null,
     private val getTinySAStatus: (() -> Boolean)? = null,
     private val getMicArrayStatus: (() -> String?)? = null,
+    private val getEp32Status: (() -> String?)? = null,
+    // GET /adas3/audio-source — informa al server qué fuente está activa
+    // (mic del móvil vs array ESP32), formato PCM, contadores y errores BT.
+    private val getAudioSourceStatus: (() -> String?)? = null,
+    // POST /adas3/audio-source — body {"source":"phone_mic|esp32_array"} para
+    // que el server pueda forzar la fuente sin tocar la UI Android. Devuelve
+    // true si se ha aplicado.
+    private val onAudioSourceRequest: ((String) -> Boolean)? = null,
     private var bindIpAddress: String? = null  // null = todas las interfaces (0.0.0.0)
 ) {
     // Audio configuration (updated from preferences)
@@ -70,6 +79,19 @@ class StreamingServerHelper(
         val delayMs: Long
     )
 
+    // Server -> client request to enable/disable the Bluetooth bridge that
+    // links Android to the ESP32 array. The phone is the BT master here; the
+    // ADAS3 server has no BT link of its own and should never try to scan.
+    enum class Ep32ControlAction { ENABLE, DISABLE, RECONNECT, STOP }
+
+    data class Ep32ControlRequest(val action: Ep32ControlAction)
+
+    data class Ep32ControlResult(
+        val accepted: Boolean,
+        val httpStatus: Int = if (accepted) 200 else 409,
+        val statusJson: String = "{\"status\":\"unknown\"}"
+    )
+
     private var serverSocket: ServerSocket? = null
     private var serverJob: kotlinx.coroutines.Job? = null
     @Volatile private var isServerRunning = false
@@ -79,13 +101,63 @@ class StreamingServerHelper(
     private val tinysaCommandClients = CopyOnWriteArrayList<Client>()
     private val micArrayDataClients = CopyOnWriteArrayList<Client>()
 
+    // PCM del array ESP32 que llega antes de que el server abra GET /audio.
+    // Sin esto, el worker descartaba frames (array_audio_frames_forwarded=0)
+    // aunque el ESP32 enviara audio correctamente.
+    private val pcmPrefetchLock = Any()
+    private val pcmPrefetch = java.io.ByteArrayOutputStream()
+    private val pcmPrefetchMaxBytes = 44100 * 2 * 2  // ~2 s mono int16 @ 44.1 kHz
+
     fun getClients(): List<Client> = (videoClients + audioClients + tinysaDataClients + tinysaCommandClients + micArrayDataClients).toList()
     fun getVideoClients(): List<Client> = videoClients.toList()
     fun getAudioClients(): List<Client> = audioClients.toList()
     fun getTinySADataClients(): List<Client> = tinysaDataClients.toList()
     fun getTinySACommandClients(): List<Client> = tinysaCommandClients.toList()
     fun getMicArrayDataClients(): List<Client> = micArrayDataClients.toList()
-    
+
+    /** Rutas que sirven PCM crudo por HTTP (no confundir con /adas3/audio-source). */
+    private fun isAudioPcmPath(path: String): Boolean {
+        if (path.contains("/adas3/audio-source", ignoreCase = true)) return false
+        if (path.contains("/adas3/mic-array/pcm", ignoreCase = true)) return true
+        return path == "/audio" || path.endsWith("/audio")
+    }
+
+    private fun appendPcmPrefetch(data: ByteArray) {
+        synchronized(pcmPrefetchLock) {
+            pcmPrefetch.write(data)
+            val size = pcmPrefetch.size()
+            if (size > pcmPrefetchMaxBytes) {
+                val all = pcmPrefetch.toByteArray()
+                pcmPrefetch.reset()
+                pcmPrefetch.write(all, size - pcmPrefetchMaxBytes, pcmPrefetchMaxBytes)
+            }
+        }
+    }
+
+    private fun flushPcmPrefetch() {
+        val pending: ByteArray
+        synchronized(pcmPrefetchLock) {
+            if (pcmPrefetch.size() == 0) return
+            pending = pcmPrefetch.toByteArray()
+            pcmPrefetch.reset()
+        }
+        writeAudioToClients(pending)
+    }
+
+    private fun writeAudioToClients(audioData: ByteArray) {
+        if (audioData.isEmpty()) return
+        val toRemove = mutableListOf<Client>()
+        audioClients.forEach { client ->
+            try {
+                client.outputStream.write(audioData)
+                client.outputStream.flush()
+            } catch (e: IOException) {
+                toRemove.add(client)
+            }
+        }
+        toRemove.forEach { removeClient(it) }
+    }
+
     /**
      * Cierra todas las conexiones activas del tipo TinySA data.
      * Útil cuando el cliente se reconecta para evitar errores 503.
@@ -217,6 +289,24 @@ class StreamingServerHelper(
                             continue
                         }
 
+                        // EP32 Bluetooth bridge status (GET). The server should poll
+                        // THIS before deciding what to do — never try to scan locally.
+                        // Returns: connected, state (OFF/SCANNING/CONNECTING/CONNECTED/ERROR),
+                        // enabled (whether the Android-side BT toggle is on), permissions
+                        // hint, last firmware, mic_count, etc.
+                        if (path.contains("/adas3/ep32-status", ignoreCase = true)) {
+                            val statusJson = getEp32Status?.invoke()
+                                ?: "{\"connected\":false,\"state\":\"OFF\",\"enabled\":false}"
+                            writer.print("HTTP/1.1 200 OK\r\n")
+                            writer.print("Connection: close\r\n")
+                            writer.print("Content-Type: application/json\r\n")
+                            writer.print("Access-Control-Allow-Origin: *\r\n\r\n")
+                            writer.print("$statusJson\r\n")
+                            writer.flush()
+                            socket.close()
+                            continue
+                        }
+
                         // Mic-array snapshot status (last heartbeat + last acoustic event).
                         // The server can poll this if it just wants the latest payload
                         // instead of opening the streaming endpoint.
@@ -232,12 +322,28 @@ class StreamingServerHelper(
                             continue
                         }
 
+                        // GET /adas3/audio-source -> snapshot de la fuente de audio
+                        // (POST se procesa más abajo, tras leer el body).
+                        if (method == "GET" &&
+                            path.contains("/adas3/audio-source", ignoreCase = true)) {
+                            val statusJson = getAudioSourceStatus?.invoke()
+                                ?: "{\"source\":\"phone_mic\"}"
+                            writer.print("HTTP/1.1 200 OK\r\n")
+                            writer.print("Connection: close\r\n")
+                            writer.print("Content-Type: application/json\r\n")
+                            writer.print("Access-Control-Allow-Origin: *\r\n\r\n")
+                            writer.print("$statusJson\r\n")
+                            writer.flush()
+                            socket.close()
+                            continue
+                        }
+
                         // Determine client type based on path
                         val clientType = when {
                             path.contains("/tinysa/data", ignoreCase = true) -> ClientType.TINYSA_DATA
                             path.contains("/tinysa/command", ignoreCase = true) -> ClientType.TINYSA_COMMAND
                             path.contains("/adas3/mic-array/data", ignoreCase = true) -> ClientType.MIC_ARRAY_DATA
-                            path.contains("/audio", ignoreCase = true) -> ClientType.AUDIO
+                            isAudioPcmPath(path) -> ClientType.AUDIO
                             else -> ClientType.VIDEO
                         }
                         
@@ -290,6 +396,43 @@ class StreamingServerHelper(
                             requestBody = String(bodyBuffer, 0, totalRead)
                         }
 
+                        // POST /adas3/audio-source — el server puede forzar la
+                        // fuente de audio sin tocar la UI Android.
+                        if (path.contains("/adas3/audio-source", ignoreCase = true)) {
+                            if (method != "POST") {
+                                writer.print("HTTP/1.1 405 Method Not Allowed\r\n")
+                                writer.print("Connection: close\r\n")
+                                writer.print("Content-Type: application/json\r\n\r\n")
+                                writer.print("{\"status\":\"method_not_allowed\"}\r\n")
+                                writer.flush()
+                                socket.close()
+                                continue
+                            }
+                            val requested = parseAudioSourceRequest(requestBody)
+                            if (requested == null) {
+                                writer.print("HTTP/1.1 400 Bad Request\r\n")
+                                writer.print("Connection: close\r\n")
+                                writer.print("Content-Type: application/json\r\n\r\n")
+                                writer.print("{\"status\":\"invalid_payload\"}\r\n")
+                                writer.flush()
+                                socket.close()
+                                continue
+                            }
+                            val applied = onAudioSourceRequest?.invoke(requested) == true
+                            val httpCode = if (applied) 200 else 501
+                            val body = if (applied) {
+                                val snap = getAudioSourceStatus?.invoke() ?: "{}"
+                                "{\"status\":\"applied\",\"snapshot\":$snap}"
+                            } else "{\"status\":\"not_implemented\"}"
+                            writer.print("HTTP/1.1 $httpCode OK\r\n")
+                            writer.print("Connection: close\r\n")
+                            writer.print("Content-Type: application/json\r\n\r\n")
+                            writer.print("$body\r\n")
+                            writer.flush()
+                            socket.close()
+                            continue
+                        }
+
                         // Dedicated endpoint for server -> client detection events.
                         if (path.contains("/adas3/detection-event", ignoreCase = true)) {
                             if (method != "POST") {
@@ -315,6 +458,57 @@ class StreamingServerHelper(
                                 writer.print("Content-Type: application/json\r\n\r\n")
                                 writer.print("{\"status\":\"invalid_payload\"}\r\n")
                             }
+                            writer.flush()
+                            socket.close()
+                            continue
+                        }
+
+                        // Endpoint for server -> client EP32 Bluetooth bridge control:
+                        // enable, disable, reconnect, stop. The Android side is the BT
+                        // master; this endpoint maps `esp32 bt on` server-side to the
+                        // same path the Android UI switch already uses. The server must
+                        // call THIS instead of trying to scan or open a BT link itself.
+                        if (path.contains("/adas3/ep32-control", ignoreCase = true)) {
+                            if (method != "POST") {
+                                writer.print("HTTP/1.1 405 Method Not Allowed\r\n")
+                                writer.print("Connection: close\r\n")
+                                writer.print("Content-Type: application/json\r\n\r\n")
+                                writer.print("{\"status\":\"method_not_allowed\"}\r\n")
+                                writer.flush()
+                                socket.close()
+                                continue
+                            }
+
+                            val controlRequest = parseEp32ControlRequest(requestBody)
+                            if (controlRequest == null) {
+                                writer.print("HTTP/1.1 400 Bad Request\r\n")
+                                writer.print("Connection: close\r\n")
+                                writer.print("Content-Type: application/json\r\n\r\n")
+                                writer.print("{\"status\":\"invalid_payload\"}\r\n")
+                                writer.flush()
+                                socket.close()
+                                continue
+                            }
+
+                            val result = onEp32Control?.invoke(controlRequest)
+                                ?: Ep32ControlResult(
+                                    accepted = false,
+                                    httpStatus = 501,
+                                    statusJson = "{\"status\":\"not_implemented\"}"
+                                )
+                            val statusLine = when (result.httpStatus) {
+                                200 -> "200 OK"
+                                202 -> "202 Accepted"
+                                400 -> "400 Bad Request"
+                                403 -> "403 Forbidden"
+                                409 -> "409 Conflict"
+                                501 -> "501 Not Implemented"
+                                else -> "${result.httpStatus} OK"
+                            }
+                            writer.print("HTTP/1.1 $statusLine\r\n")
+                            writer.print("Connection: close\r\n")
+                            writer.print("Content-Type: application/json\r\n\r\n")
+                            writer.print("${result.statusJson}\r\n")
                             writer.flush()
                             socket.close()
                             continue
@@ -388,7 +582,11 @@ class StreamingServerHelper(
                                 writer.print("Content-Type: audio/pcm; rate=$audioSampleRate; channels=$audioChannels\r\n\r\n")
                                 writer.flush()
                                 audioClients.add(Client(socket, outputStream, writer, clientType))
-                                onLog("Audio client connected (rate=$audioSampleRate, channels=$audioChannels)")
+                                flushPcmPrefetch()
+                                onLog(
+                                    "Audio client connected (rate=$audioSampleRate, " +
+                                        "channels=$audioChannels, listeners=${audioClients.size})"
+                                )
                             }
                             ClientType.TINYSA_DATA -> {
                                 // Solo permitimos un cliente TinySA data a la vez.
@@ -580,17 +778,13 @@ class StreamingServerHelper(
     }
 
     fun sendAudioData(audioData: ByteArray) {
-        val toRemove = mutableListOf<Client>()
-        audioClients.forEach { client ->
-            try {
-                // Send raw PCM audio data
-                client.outputStream.write(audioData)
-                client.outputStream.flush()
-            } catch (e: IOException) {
-                toRemove.add(client)
-            }
+        if (audioData.isEmpty()) return
+        if (audioClients.isEmpty()) {
+            appendPcmPrefetch(audioData)
+            return
         }
-        toRemove.forEach { removeClient(it) }
+        flushPcmPrefetch()
+        writeAudioToClients(audioData)
     }
 
     private fun parseDetectionEvent(requestBody: String): DetectionEvent? {
@@ -618,6 +812,48 @@ class StreamingServerHelper(
                 confidencePercent = if (json.has("confidence_percent")) json.optInt("confidence_percent") else null,
                 frequencyHz = frequencyHz.takeUnless { it.isNaN() }
             )
+        } catch (_: JSONException) {
+            null
+        }
+    }
+
+    /**
+     * Parsea body para POST /adas3/audio-source. Acepta:
+     *   {"source":"phone_mic"} | {"source":"esp32_array"}
+     * y los alias razonables ("phone"/"mic"/"internal" → phone_mic,
+     * "array"/"esp32"/"external" → esp32_array). Devuelve la cadena
+     * canónica (la que el cliente persistirá en SharedPreferences) o null.
+     */
+    private fun parseAudioSourceRequest(requestBody: String): String? {
+        return try {
+            val json = JSONObject(requestBody)
+            val raw = json.optString("source", "").trim().lowercase()
+            when (raw) {
+                "phone_mic", "phone", "mic", "internal" -> "phone_mic"
+                "esp32_array", "array", "esp32", "external" -> "esp32_array"
+                else -> null
+            }
+        } catch (_: JSONException) {
+            null
+        }
+    }
+
+    private fun parseEp32ControlRequest(requestBody: String): Ep32ControlRequest? {
+        return try {
+            val json = JSONObject(requestBody)
+            val type = json.optString("type", "")
+            if (type.isNotEmpty() && !type.equals("adas3-ep32-control", ignoreCase = true)) {
+                return null
+            }
+            val action = json.optString("action", "").trim().lowercase()
+            val mapped = when (action) {
+                "enable", "on", "start" -> Ep32ControlAction.ENABLE
+                "disable", "off" -> Ep32ControlAction.DISABLE
+                "reconnect", "restart" -> Ep32ControlAction.RECONNECT
+                "stop" -> Ep32ControlAction.STOP
+                else -> null
+            } ?: return null
+            Ep32ControlRequest(mapped)
         } catch (_: JSONException) {
             null
         }

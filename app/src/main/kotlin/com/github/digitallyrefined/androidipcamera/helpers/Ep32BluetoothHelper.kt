@@ -33,6 +33,7 @@ class Ep32BluetoothHelper(
     private val onLog: (String) -> Unit = {},
     private val onHeartbeat: (Heartbeat) -> Unit = {},
     private val onAcoustic: (Acoustic) -> Unit = {},
+    private val onAudioFrame: (AudioFrame) -> Unit = {},
     private val onUnknownPayload: (String) -> Unit = {}
 ) {
     enum class State {
@@ -42,9 +43,21 @@ class Ep32BluetoothHelper(
     // JSONL payloads emitted by ESP32 over Bluetooth SPP. The ESP32 processes
     // I2S mic-array beamforming/GCC-PHAT locally and pushes events here; the
     // Android side never receives raw audio over Bluetooth.
+    //
+    // The firmware MAY emit only the legacy minimal contract
+    // (type/mic_count/firmware for heartbeat, type/detected/doa_deg/energy/
+    // confidence/mic_count for acoustic). It MAY also enrich the payload with
+    // wiring/config/pair/bus metadata. Both shapes are accepted; unknown
+    // top-level keys are captured into `extras` as raw JSON so the forwarding
+    // layer can preserve them on the wire to the server.
     data class Heartbeat(
         val micCount: Int,
-        val firmware: String?
+        val firmware: String?,
+        val pair: String? = null,
+        val bus: String? = null,
+        val wiringJson: String? = null,
+        val configJson: String? = null,
+        val extras: Map<String, String> = emptyMap()
     )
 
     data class Acoustic(
@@ -52,7 +65,28 @@ class Ep32BluetoothHelper(
         val doaDeg: Double?,
         val energy: Double?,
         val confidence: Double?,
-        val micCount: Int?
+        val micCount: Int?,
+        val pair: String? = null,
+        val bus: String? = null,
+        val wiringJson: String? = null,
+        val configJson: String? = null,
+        val extras: Map<String, String> = emptyMap()
+    )
+
+    // Frame de audio PCM emitido por el firmware cuando se le envía AUDIO_ON.
+    // El payload JSONL es:
+    //   {"type":"audio","seq":<int>,"encoding":"pcm16","sample_rate":8000,
+    //    "channels":1,"samples":<int>,"data":"<base64>"}
+    // Aquí ya viene decodificado el campo `data` a bytes PCM16 little-endian
+    // (mismo formato que AudioRecord ENCODING_PCM_16BIT mono) para que el
+    // forwarder lo trate igual que el audio del micrófono del móvil.
+    data class AudioFrame(
+        val seq: Long,
+        val encoding: String,         // "pcm16"
+        val sampleRate: Int,          // p.ej. 8000
+        val channels: Int,            // 1
+        val samples: Int,             // número de samples mono
+        val pcm: ByteArray            // sampleSize=samples*2 bytes
     )
 
     private val appContext = context.applicationContext
@@ -74,9 +108,14 @@ class Ep32BluetoothHelper(
     @Volatile private var lastInboundActivityMs: Long = 0L
     @Volatile private var lastHeartbeat: Heartbeat? = null
     @Volatile private var lastAcoustic: Acoustic? = null
+    @Volatile private var currentStateValue: State = State.OFF
+    @Volatile private var currentStateDetail: String? = null
 
     fun getLastHeartbeat(): Heartbeat? = lastHeartbeat
     fun getLastAcoustic(): Acoustic? = lastAcoustic
+    fun currentState(): State = currentStateValue
+    fun currentStateDetail(): String? = currentStateDetail
+    fun isActive(): Boolean = active
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -312,10 +351,15 @@ class Ep32BluetoothHelper(
             "heartbeat" -> {
                 val hb = Heartbeat(
                     micCount = json.optInt("mic_count", 0),
-                    firmware = json.optString("firmware", "").ifBlank { null }
+                    firmware = json.optString("firmware", "").ifBlank { null },
+                    pair = json.optString("pair", "").ifBlank { null },
+                    bus = json.optString("bus", "").ifBlank { null },
+                    wiringJson = json.optJSONObject("wiring")?.toString(),
+                    configJson = json.optJSONObject("config")?.toString(),
+                    extras = collectExtras(json, KNOWN_HEARTBEAT_KEYS)
                 )
                 lastHeartbeat = hb
-                onLog("EP32 heartbeat: mics=${hb.micCount} fw=${hb.firmware ?: "?"}")
+                onLog("EP32 heartbeat: mics=${hb.micCount} fw=${hb.firmware ?: "?"} pair=${hb.pair ?: "-"}")
                 onHeartbeat(hb)
             }
             "acoustic" -> {
@@ -324,15 +368,72 @@ class Ep32BluetoothHelper(
                     doaDeg = if (json.has("doa_deg")) json.optDouble("doa_deg").takeUnless { it.isNaN() } else null,
                     energy = if (json.has("energy")) json.optDouble("energy").takeUnless { it.isNaN() } else null,
                     confidence = if (json.has("confidence")) json.optDouble("confidence").takeUnless { it.isNaN() } else null,
-                    micCount = if (json.has("mic_count")) json.optInt("mic_count") else null
+                    micCount = if (json.has("mic_count")) json.optInt("mic_count") else null,
+                    pair = json.optString("pair", "").ifBlank { null },
+                    bus = json.optString("bus", "").ifBlank { null },
+                    wiringJson = json.optJSONObject("wiring")?.toString(),
+                    configJson = json.optJSONObject("config")?.toString(),
+                    extras = collectExtras(json, KNOWN_ACOUSTIC_KEYS)
                 )
                 lastAcoustic = ac
                 onAcoustic(ac)
+            }
+            "audio" -> {
+                val b64 = json.optString("data", "")
+                if (b64.isBlank()) {
+                    onLog("EP32 audio frame sin data")
+                    return
+                }
+                val pcm = try {
+                    android.util.Base64.decode(b64, android.util.Base64.NO_WRAP)
+                } catch (e: IllegalArgumentException) {
+                    onLog("EP32 audio frame base64 inválido: ${e.message}")
+                    return
+                }
+                val frame = AudioFrame(
+                    seq = json.optLong("seq", 0L),
+                    encoding = json.optString("encoding", "pcm16"),
+                    sampleRate = json.optInt("sample_rate", 8000),
+                    channels = json.optInt("channels", 1),
+                    samples = json.optInt("samples", pcm.size / 2),
+                    pcm = pcm
+                )
+                onAudioFrame(frame)
             }
             else -> {
                 onUnknownPayload(line)
             }
         }
+    }
+
+    // Helpers públicos para encender/apagar el streaming de audio del array.
+    // Se reutiliza sendCommand(...) que ya valida que el socket esté abierto.
+    fun requestAudioOn() {
+        sendCommand("AUDIO_ON")
+    }
+
+    fun requestAudioOff() {
+        sendCommand("AUDIO_OFF")
+    }
+
+    private fun collectExtras(json: JSONObject, knownKeys: Set<String>): Map<String, String> {
+        val keys = json.keys()
+        val extras = LinkedHashMap<String, String>()
+        while (keys.hasNext()) {
+            val k = keys.next()
+            if (k in knownKeys) continue
+            // Preserve unknown fields as raw JSON-encoded strings so the
+            // forwarder can splice them into the outbound payload verbatim.
+            val v = json.opt(k) ?: continue
+            extras[k] = when (v) {
+                is JSONObject -> v.toString()
+                is org.json.JSONArray -> v.toString()
+                is String -> JSONObject.quote(v)
+                is Boolean, is Int, is Long, is Double -> v.toString()
+                else -> JSONObject.quote(v.toString())
+            }
+        }
+        return extras
     }
 
     @SuppressLint("MissingPermission")
@@ -479,6 +580,8 @@ class Ep32BluetoothHelper(
     }
 
     private fun emitState(state: State, detail: String?) {
+        currentStateValue = state
+        currentStateDetail = detail
         mainHandler.post {
             onStateChanged(state, detail)
         }
@@ -525,5 +628,21 @@ class Ep32BluetoothHelper(
         // ESP32 firmware should emit a heartbeat at least every ~10s, so the
         // watchdog gives generous margin before considering the link silent.
         private const val INBOUND_SILENCE_TIMEOUT_MS = 30_000L
+
+        private val KNOWN_HEARTBEAT_KEYS = setOf(
+            "type", "mic_count", "firmware", "pair", "bus", "wiring", "config",
+            // Campos del modo audio streaming añadidos en firmware 0.3.0:
+            "audio_streaming", "audio_format", "audio_frames_sent",
+            "pair_a_ready", "pair_b_ready"
+        )
+
+        private val KNOWN_ACOUSTIC_KEYS = setOf(
+            "type", "detected", "doa_deg", "energy", "confidence", "mic_count",
+            "pair", "bus", "wiring", "config"
+        )
+
+        private val KNOWN_AUDIO_KEYS = setOf(
+            "type", "seq", "encoding", "sample_rate", "channels", "samples", "data"
+        )
     }
 }

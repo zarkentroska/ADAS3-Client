@@ -24,6 +24,14 @@
     <!-- Language Settings -->
     <string name="settings_language_title">Idioma</string>
     <string name="settings_language_summary">Selecciona el idioma de la aplicación</string>
+
+    <!-- Audio source for Keras detection on the server -->
+    <string name="settings_audio_source_category">Fuente de audio</string>
+    <string name="settings_audio_source_summary">Qué micrófono envía PCM al servidor para la detección Keras</string>
+    <string name="settings_audio_source_title">Origen del audio</string>
+    <string name="settings_audio_source_pref_summary">Mic interno del móvil o array I2S del ESP32 (vía Bluetooth SPP)</string>
+    <string name="settings_audio_source_phone">Micro del móvil</string>
+    <string name="settings_audio_source_array">Array ESP32 (4 mics I2S)</string>
     
     <!-- HTTP Auth Settings -->
     <string name="settings_http_auth_summary">Dejar en blanco para no usar nombre de usuario/contraseña</string>
